@@ -49,7 +49,7 @@ bahn commit -y
 ### Autonomous Mode
 
 ```bash
-# Watch and auto-commit changes
+# Watch and auto-commit changes (real-time)
 bahn auto --watch
 
 # Custom interval (seconds)
@@ -58,6 +58,27 @@ bahn auto --watch --interval 60
 # Dry run - see what would be committed
 bahn auto --dry-run
 ```
+
+### Human-like Commits (Stealth Mode)
+
+```bash
+# Interactive mode - prompt before each commit with timestamp choice
+bahn auto --watch --prompt
+
+# Deferred mode - collect commits, spread timestamps on exit
+bahn auto --watch --defer --spread 4h
+
+# Deferred with custom start time
+bahn auto --watch --defer --spread 4h --start "2025-01-05 09:00"
+```
+
+**`--prompt` mode** asks you for each change:
+- Commit now (current time)
+- Commit with backdated time (e.g., "2h ago")
+- Add to batch (commit later with spread timestamps)
+- Skip
+
+**`--defer` mode** collects all commits during your session, then creates them with randomly spread timestamps when you press Ctrl+C. Perfect for making AI-assisted coding look natural.
 
 ### Code Rewrite
 
