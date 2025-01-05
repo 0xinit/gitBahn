@@ -74,6 +74,22 @@ enum Commands {
         /// Dry run - don't actually commit
         #[arg(long)]
         dry_run: bool,
+
+        /// Interactive mode - prompt before each commit with timestamp choice
+        #[arg(long)]
+        prompt: bool,
+
+        /// Defer commits until session end (use with --spread)
+        #[arg(long)]
+        defer: bool,
+
+        /// Spread deferred commits over time (e.g., "2h", "30m", "1d")
+        #[arg(long)]
+        spread: Option<String>,
+
+        /// Start time for spread commits (e.g., "2025-01-05 09:00")
+        #[arg(long)]
+        start: Option<String>,
     },
 
     /// AI-powered code rewrite
@@ -154,8 +170,20 @@ async fn main() -> Result<()> {
             commands::commit::run(options, &config).await
         }
 
-        Commands::Auto { watch, interval, merge, target, max_commits, dry_run } => {
-            commands::auto::run(&config, watch, interval, merge, &target, max_commits, dry_run).await
+        Commands::Auto { watch, interval, merge, target, max_commits, dry_run, prompt, defer, spread, start } => {
+            let auto_options = commands::auto::AutoModeOptions {
+                watch,
+                interval,
+                merge,
+                target,
+                max_commits,
+                dry_run,
+                prompt,
+                defer,
+                spread,
+                start,
+            };
+            commands::auto::run(&config, auto_options).await
         }
 
         Commands::Rewrite { path, instructions, dry_run } => {
