@@ -1,0 +1,10 @@
+/target
+Cargo.lock
+.bahn.toml
+.env
+*.log
+.DS_Store
+.compound/
+.bahn.lock
+/plans/
+.claude
