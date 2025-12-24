@@ -12,6 +12,7 @@ use crate::core::git;
 /// Options for the commit command
 pub struct CommitOptions {
     pub atomic: bool,
+    #[allow(dead_code)] // Will be used when custom templates are implemented
     pub conventional: bool,
     pub agent: Option<String>,
     pub auto_confirm: bool,

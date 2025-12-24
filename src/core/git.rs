@@ -24,6 +24,7 @@ pub struct StagedChanges {
 
 #[derive(Debug, Clone, Default)]
 pub struct DiffStats {
+    #[allow(dead_code)] // Available for detailed stats display
     pub files_changed: usize,
     pub insertions: usize,
     pub deletions: usize,
