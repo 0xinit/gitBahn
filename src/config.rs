@@ -8,7 +8,7 @@ use colored::Colorize;
 use serde::{Deserialize, Serialize};
 
 /// Default configuration file name
-const CONFIG_FILE: &str = ".gitBahn.toml";
+const CONFIG_FILE: &str = ".bahn.toml";
 
 /// Global configuration directory
 fn global_config_dir() -> PathBuf {
@@ -18,7 +18,7 @@ fn global_config_dir() -> PathBuf {
 }
 
 /// Configuration for gitBahn
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     /// AI provider settings
     #[serde(default)]
@@ -177,7 +177,7 @@ impl Default for ReviewConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GitHubConfig {
     /// GitHub token (can also use GITHUB_TOKEN env var)
     #[serde(default)]
@@ -186,27 +186,6 @@ pub struct GitHubConfig {
     /// Default repository (owner/repo)
     #[serde(default)]
     pub default_repo: Option<String>,
-}
-
-impl Default for GitHubConfig {
-    fn default() -> Self {
-        Self {
-            token: None,
-            default_repo: None,
-        }
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            ai: AiConfig::default(),
-            commit: CommitConfig::default(),
-            docs: DocsConfig::default(),
-            review: ReviewConfig::default(),
-            github: GitHubConfig::default(),
-        }
-    }
 }
 
 impl Config {
@@ -266,12 +245,14 @@ impl Config {
     }
 
     /// Get the GitHub token
+    #[allow(dead_code)] // Will be used when GitHub integration is implemented
     pub fn github_token(&self) -> Option<&str> {
         self.github.token.as_deref()
     }
 }
 
 /// Initialize configuration file
+#[allow(dead_code)] // Available for future CLI subcommand
 pub fn init_config(force: bool) -> Result<()> {
     let local_path = PathBuf::from(CONFIG_FILE);
 
@@ -299,6 +280,7 @@ pub fn init_config(force: bool) -> Result<()> {
 }
 
 /// Show current configuration
+#[allow(dead_code)] // Available for future CLI subcommand
 pub fn show_config(config: &Config) -> Result<()> {
     println!("{}", "Current Configuration:".bold());
     println!();
