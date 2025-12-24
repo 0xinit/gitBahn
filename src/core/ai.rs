@@ -1,7 +1,14 @@
 //! AI integration for commit message generation and code review.
 
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+
+/// Retry configuration for API calls
+const MAX_RETRIES: u32 = 3;
+const BASE_DELAY_MS: u64 = 1000;
+const MAX_DELAY_MS: u64 = 30000;
 
 /// Message for the Claude API
 #[derive(Debug, Serialize)]
@@ -207,7 +214,7 @@ Only output the documentation, ready to be inserted into the code."#,
         Ok(review)
     }
 
-    /// Send a message to Claude API
+    /// Send a message to Claude API with retry logic
     async fn send_message(&self, system: &str, user: &str) -> Result<String> {
         let request = ClaudeRequest {
             model: self.model.clone(),
@@ -219,29 +226,64 @@ Only output the documentation, ready to be inserted into the code."#,
             system: Some(system.to_string()),
         };
 
-        let response = self.client
-            .post("https://api.anthropic.com/v1/messages")
-            .header("Content-Type", "application/json")
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .json(&request)
-            .send()
-            .await
-            .context("Failed to send request to Claude API")?;
+        let mut last_error = None;
+        let mut delay_ms = BASE_DELAY_MS;
 
-        if !response.status().is_success() {
+        for attempt in 0..=MAX_RETRIES {
+            if attempt > 0 {
+                eprintln!("Retrying API request (attempt {}/{})", attempt + 1, MAX_RETRIES + 1);
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                delay_ms = (delay_ms * 2).min(MAX_DELAY_MS);
+            }
+
+            let response = match self.client
+                .post("https://api.anthropic.com/v1/messages")
+                .header("Content-Type", "application/json")
+                .header("x-api-key", &self.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .json(&request)
+                .send()
+                .await
+            {
+                Ok(resp) => resp,
+                Err(e) => {
+                    // Network errors are retryable
+                    last_error = Some(format!("Network error: {}", e));
+                    continue;
+                }
+            };
+
             let status = response.status();
+
+            // Success - return the response
+            if status.is_success() {
+                let claude_response: ClaudeResponse = response.json().await
+                    .context("Failed to parse Claude API response")?;
+
+                return Ok(claude_response.content
+                    .first()
+                    .map(|c| c.text.clone())
+                    .unwrap_or_default());
+            }
+
+            // Check if error is retryable
             let error_text = response.text().await.unwrap_or_default();
+
+            if status.as_u16() == 429 || status.as_u16() >= 500 {
+                // Rate limit (429) or server errors (5xx) are retryable
+                last_error = Some(format!("API error ({}): {}", status, error_text));
+                continue;
+            }
+
+            // Non-retryable errors (400, 401, 403, etc.) - fail immediately
             anyhow::bail!("Claude API error ({}): {}", status, error_text);
         }
 
-        let claude_response: ClaudeResponse = response.json().await
-            .context("Failed to parse Claude API response")?;
-
-        Ok(claude_response.content
-            .first()
-            .map(|c| c.text.clone())
-            .unwrap_or_default())
+        // All retries exhausted
+        anyhow::bail!("Claude API request failed after {} attempts. Last error: {}",
+            MAX_RETRIES + 1,
+            last_error.unwrap_or_else(|| "Unknown error".to_string())
+        )
     }
 
     /// Build system prompt for commit messages
