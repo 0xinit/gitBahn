@@ -12,6 +12,15 @@ use crate::core::git;
 use crate::core::lock::LockGuard;
 use crate::core::watcher::{FileWatcher, WatchEvent};
 
+/// Options for auto mode with squash support
+struct AutoOptions {
+    interval: u64,
+    max_commits: usize,
+    dry_run: bool,
+    rewrite_history: bool,
+    squash_threshold: usize,
+}
+
 /// Run the auto command
 pub async fn run(
     config: &Config,
@@ -37,6 +46,15 @@ pub async fn run(
 
     let ai = AiClient::new(api_key.to_string(), Some(config.ai.model.clone()));
 
+    // Build options from config and CLI args
+    let options = AutoOptions {
+        interval,
+        max_commits,
+        dry_run,
+        rewrite_history: config.auto.rewrite_history,
+        squash_threshold: config.auto.squash_threshold,
+    };
+
     if watch {
         // Acquire lock to prevent concurrent instances
         let repo = git::open_repo(None)?;
@@ -44,7 +62,7 @@ pub async fn run(
         let _lock = LockGuard::acquire(repo_root)?;
         drop(repo); // Release repo before watch mode
 
-        run_watch_mode(&ai, interval, max_commits, dry_run).await
+        run_watch_mode(&ai, &options).await
     } else {
         run_single(&ai, dry_run).await
     }
@@ -95,20 +113,23 @@ async fn run_single(ai: &AiClient, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_watch_mode(ai: &AiClient, interval: u64, max_commits: usize, dry_run: bool) -> Result<()> {
+async fn run_watch_mode(ai: &AiClient, options: &AutoOptions) -> Result<()> {
     // Use filesystem events if interval is 0, otherwise poll
-    if interval == 0 {
-        run_event_watch_mode(ai, max_commits, dry_run).await
+    if options.interval == 0 {
+        run_event_watch_mode(ai, options).await
     } else {
-        run_polling_watch_mode(ai, interval, max_commits, dry_run).await
+        run_polling_watch_mode(ai, options).await
     }
 }
 
-async fn run_event_watch_mode(ai: &AiClient, max_commits: usize, dry_run: bool) -> Result<()> {
+async fn run_event_watch_mode(ai: &AiClient, options: &AutoOptions) -> Result<()> {
     let repo = git::open_repo(None)?;
     let repo_root = git::repo_root(&repo)?;
 
-    println!("Watching for file changes (event-based, max {} commits)", max_commits);
+    println!("Watching for file changes (event-based, max {} commits)", options.max_commits);
+    if options.rewrite_history {
+        println!("History rewriting enabled (squash after {} commits)", options.squash_threshold);
+    }
     println!("Press Ctrl+C to stop\n");
 
     // Create watcher with 500ms debounce
@@ -116,9 +137,10 @@ async fn run_event_watch_mode(ai: &AiClient, max_commits: usize, dry_run: bool) 
     let rx = watcher.watch(PathBuf::from(repo_root))?;
 
     let mut commit_count = 0;
+    let mut commits_since_squash = 0;
     let mut shutdown = false;
 
-    while !shutdown && commit_count < max_commits {
+    while !shutdown && commit_count < options.max_commits {
         // Check for events with timeout
         match rx.recv_timeout(std::time::Duration::from_millis(100)) {
             Ok(WatchEvent::FilesChanged(paths)) => {
@@ -126,8 +148,19 @@ async fn run_event_watch_mode(ai: &AiClient, max_commits: usize, dry_run: bool) 
                     "→".dimmed(),
                     paths.len()
                 );
-                if let Err(e) = check_and_commit(ai, dry_run, &mut commit_count).await {
+                if let Err(e) = check_and_commit(ai, options.dry_run, &mut commit_count).await {
                     eprintln!("{} {}", "Error:".red(), e);
+                } else {
+                    commits_since_squash += 1;
+
+                    // Check if we should squash
+                    if options.rewrite_history && commits_since_squash >= options.squash_threshold {
+                        if let Err(e) = maybe_squash_commits(ai, options.squash_threshold, options.dry_run).await {
+                            eprintln!("{} Squash failed: {}", "Warning:".yellow(), e);
+                        } else {
+                            commits_since_squash = 0;
+                        }
+                    }
                 }
             }
             Ok(WatchEvent::Error(e)) => {
@@ -151,7 +184,7 @@ async fn run_event_watch_mode(ai: &AiClient, max_commits: usize, dry_run: bool) 
         }
     }
 
-    if commit_count >= max_commits {
+    if commit_count >= options.max_commits {
         println!("{}", "Max commits reached. Stopping.".yellow());
     }
 
@@ -163,21 +196,26 @@ async fn run_event_watch_mode(ai: &AiClient, max_commits: usize, dry_run: bool) 
     Ok(())
 }
 
-async fn run_polling_watch_mode(ai: &AiClient, interval: u64, max_commits: usize, dry_run: bool) -> Result<()> {
-    println!("Watching for changes every {}s (max {} commits)", interval, max_commits);
+async fn run_polling_watch_mode(ai: &AiClient, options: &AutoOptions) -> Result<()> {
+    println!("Watching for changes every {}s (max {} commits)", options.interval, options.max_commits);
+    if options.rewrite_history {
+        println!("History rewriting enabled (squash after {} commits)", options.squash_threshold);
+    }
     println!("Press Ctrl+C to stop\n");
 
     let mut commit_count = 0;
+    let mut commits_since_squash = 0;
 
     loop {
-        if commit_count >= max_commits {
+        if commit_count >= options.max_commits {
             println!("{}", "Max commits reached. Stopping.".yellow());
             break;
         }
 
         // Check for changes and commit if any
+        let old_count = commit_count;
         let should_continue = select! {
-            result = check_and_commit(ai, dry_run, &mut commit_count) => {
+            result = check_and_commit(ai, options.dry_run, &mut commit_count) => {
                 result?;
                 true
             }
@@ -191,9 +229,23 @@ async fn run_polling_watch_mode(ai: &AiClient, interval: u64, max_commits: usize
             break;
         }
 
+        // Track commits for squash
+        if commit_count > old_count {
+            commits_since_squash += 1;
+
+            // Check if we should squash
+            if options.rewrite_history && commits_since_squash >= options.squash_threshold {
+                if let Err(e) = maybe_squash_commits(ai, options.squash_threshold, options.dry_run).await {
+                    eprintln!("{} Squash failed: {}", "Warning:".yellow(), e);
+                } else {
+                    commits_since_squash = 0;
+                }
+            }
+        }
+
         // Wait for next interval, but also listen for Ctrl+C
         select! {
-            _ = tokio::time::sleep(tokio::time::Duration::from_secs(interval)) => {}
+            _ = tokio::time::sleep(tokio::time::Duration::from_secs(options.interval)) => {}
             _ = tokio::signal::ctrl_c() => {
                 println!("\n{}", "Received Ctrl+C, shutting down gracefully...".yellow());
                 break;
@@ -242,6 +294,50 @@ async fn check_and_commit(ai: &AiClient, dry_run: bool, commit_count: &mut usize
             }
         }
     }
+
+    Ok(())
+}
+
+/// Squash commits if they haven't been pushed
+async fn maybe_squash_commits(ai: &AiClient, count: usize, dry_run: bool) -> Result<()> {
+    let repo = git::open_repo(None)?;
+
+    // Safety check: only squash unpushed commits
+    let unpushed = git::count_unpushed_commits(&repo)?;
+    if unpushed < count {
+        println!("{} Only {} unpushed commits, need {} to squash. Skipping.",
+            "→".dimmed(),
+            unpushed,
+            count
+        );
+        return Ok(());
+    }
+
+    // Get commit messages to summarize
+    let messages = git::get_commit_messages_for_squash(&repo, count)?;
+    let commits_text = messages.join("\n---\n");
+
+    // Generate squash message using AI
+    let squash_message = ai.generate_squash_message(&commits_text).await?;
+
+    if dry_run {
+        println!("{} Would squash {} commits into:",
+            "[DRY RUN]".yellow(),
+            count
+        );
+        println!("  {}", squash_message.lines().next().unwrap_or(""));
+        return Ok(());
+    }
+
+    // Perform the squash
+    let oid = git::squash_commits(&repo, count, &squash_message)?;
+
+    println!("{} Squashed {} commits → {}",
+        "⊕".cyan().bold(),
+        count,
+        oid.to_string()[..7].cyan()
+    );
+    println!("  {}", squash_message.lines().next().unwrap_or(""));
 
     Ok(())
 }
