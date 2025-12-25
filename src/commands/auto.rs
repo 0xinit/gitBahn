@@ -1,5 +1,7 @@
 //! Auto command - Autonomous mode for watching and auto-committing.
 
+use std::path::PathBuf;
+
 use anyhow::{Context, Result};
 use colored::Colorize;
 use tokio::select;
@@ -7,6 +9,8 @@ use tokio::select;
 use crate::config::Config;
 use crate::core::ai::AiClient;
 use crate::core::git;
+use crate::core::lock::LockGuard;
+use crate::core::watcher::{FileWatcher, WatchEvent};
 
 /// Run the auto command
 pub async fn run(
@@ -34,6 +38,12 @@ pub async fn run(
     let ai = AiClient::new(api_key.to_string(), Some(config.ai.model.clone()));
 
     if watch {
+        // Acquire lock to prevent concurrent instances
+        let repo = git::open_repo(None)?;
+        let repo_root = git::repo_root(&repo)?;
+        let _lock = LockGuard::acquire(repo_root)?;
+        drop(repo); // Release repo before watch mode
+
         run_watch_mode(&ai, interval, max_commits, dry_run).await
     } else {
         run_single(&ai, dry_run).await
@@ -86,6 +96,74 @@ async fn run_single(ai: &AiClient, dry_run: bool) -> Result<()> {
 }
 
 async fn run_watch_mode(ai: &AiClient, interval: u64, max_commits: usize, dry_run: bool) -> Result<()> {
+    // Use filesystem events if interval is 0, otherwise poll
+    if interval == 0 {
+        run_event_watch_mode(ai, max_commits, dry_run).await
+    } else {
+        run_polling_watch_mode(ai, interval, max_commits, dry_run).await
+    }
+}
+
+async fn run_event_watch_mode(ai: &AiClient, max_commits: usize, dry_run: bool) -> Result<()> {
+    let repo = git::open_repo(None)?;
+    let repo_root = git::repo_root(&repo)?;
+
+    println!("Watching for file changes (event-based, max {} commits)", max_commits);
+    println!("Press Ctrl+C to stop\n");
+
+    // Create watcher with 500ms debounce
+    let watcher = FileWatcher::new(500);
+    let rx = watcher.watch(PathBuf::from(repo_root))?;
+
+    let mut commit_count = 0;
+    let mut shutdown = false;
+
+    while !shutdown && commit_count < max_commits {
+        // Check for events with timeout
+        match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(WatchEvent::FilesChanged(paths)) => {
+                println!("{} {} file(s) changed",
+                    "→".dimmed(),
+                    paths.len()
+                );
+                if let Err(e) = check_and_commit(ai, dry_run, &mut commit_count).await {
+                    eprintln!("{} {}", "Error:".red(), e);
+                }
+            }
+            Ok(WatchEvent::Error(e)) => {
+                eprintln!("{} Watcher error: {}", "Warning:".yellow(), e);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // Check for Ctrl+C during idle
+                select! {
+                    biased;
+                    _ = tokio::signal::ctrl_c() => {
+                        println!("\n{}", "Received Ctrl+C, shutting down gracefully...".yellow());
+                        shutdown = true;
+                    }
+                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(1)) => {}
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                eprintln!("{}", "Watcher disconnected".red());
+                break;
+            }
+        }
+    }
+
+    if commit_count >= max_commits {
+        println!("{}", "Max commits reached. Stopping.".yellow());
+    }
+
+    println!("{} Auto mode stopped. {} commits made.",
+        "✓".green(),
+        commit_count.to_string().cyan()
+    );
+
+    Ok(())
+}
+
+async fn run_polling_watch_mode(ai: &AiClient, interval: u64, max_commits: usize, dry_run: bool) -> Result<()> {
     println!("Watching for changes every {}s (max {} commits)", interval, max_commits);
     println!("Press Ctrl+C to stop\n");
 
