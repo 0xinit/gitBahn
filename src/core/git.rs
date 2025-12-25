@@ -275,3 +275,132 @@ pub fn repo_root(repo: &Repository) -> Result<&Path> {
     repo.workdir()
         .context("Could not get repository root (bare repository?)")
 }
+
+/// Check if commits have been pushed to remote
+#[allow(dead_code)]
+pub fn has_unpushed_commits(repo: &Repository) -> Result<bool> {
+    let head = repo.head()?;
+    let head_oid = head.target().context("Could not get HEAD target")?;
+
+    // Try to find upstream branch
+    if let Ok(branch) = repo.find_branch(
+        head.shorthand().unwrap_or("HEAD"),
+        git2::BranchType::Local,
+    ) {
+        if let Ok(upstream) = branch.upstream() {
+            let upstream_oid = upstream.get().target().context("Could not get upstream target")?;
+            return Ok(head_oid != upstream_oid);
+        }
+    }
+
+    // No upstream, all commits are unpushed
+    Ok(true)
+}
+
+/// Count unpushed commits
+pub fn count_unpushed_commits(repo: &Repository) -> Result<usize> {
+    let head = repo.head()?;
+
+    // Try to find upstream branch
+    if let Ok(branch) = repo.find_branch(
+        head.shorthand().unwrap_or("HEAD"),
+        git2::BranchType::Local,
+    ) {
+        if let Ok(upstream) = branch.upstream() {
+            let upstream_oid = upstream.get().target().context("Could not get upstream target")?;
+            let head_oid = head.target().context("Could not get HEAD target")?;
+
+            let mut revwalk = repo.revwalk()?;
+            revwalk.push(head_oid)?;
+            revwalk.hide(upstream_oid)?;
+
+            return Ok(revwalk.count());
+        }
+    }
+
+    // No upstream, count all commits
+    let mut revwalk = repo.revwalk()?;
+    revwalk.push_head()?;
+    Ok(revwalk.count())
+}
+
+/// Squash the last N commits into one with a new message
+pub fn squash_commits(repo: &Repository, count: usize, message: &str) -> Result<git2::Oid> {
+    if count < 2 {
+        anyhow::bail!("Need at least 2 commits to squash");
+    }
+
+    let signature = repo.signature()?;
+    let head = repo.head()?;
+    let head_commit = head.peel_to_commit()?;
+
+    // Get the parent commit that will be the new parent after squash
+    let mut current = head_commit.clone();
+    for _ in 0..(count - 1) {
+        current = current.parent(0).context("Not enough commits to squash")?;
+    }
+    let base_parent = current.parent(0).context("Cannot squash initial commits")?;
+
+    // Get the tree from HEAD (final state after all commits)
+    let tree = head_commit.tree()?;
+
+    // Create new commit with squashed message
+    let commit_id = repo.commit(
+        None, // Don't update HEAD yet
+        &signature,
+        &signature,
+        message,
+        &tree,
+        &[&base_parent],
+    )?;
+
+    // Update HEAD to point to the new commit
+    repo.reference(
+        "HEAD",
+        commit_id,
+        true,
+        &format!("squash: {} commits", count),
+    )?;
+
+    // Reset the index to match the new HEAD
+    let new_commit = repo.find_commit(commit_id)?;
+    repo.reset(new_commit.as_object(), git2::ResetType::Soft, None)?;
+
+    Ok(commit_id)
+}
+
+/// Amend the last commit with a new message
+#[allow(dead_code)]
+pub fn amend_last_commit(repo: &Repository, new_message: &str) -> Result<git2::Oid> {
+    let head = repo.head()?;
+    let head_commit = head.peel_to_commit()?;
+
+    let commit_id = head_commit.amend(
+        Some("HEAD"),
+        None, // Keep author
+        None, // Keep committer
+        None, // Keep encoding
+        Some(new_message),
+        None, // Keep tree
+    )?;
+
+    Ok(commit_id)
+}
+
+/// Get commit messages for the last N commits (for squash summary)
+pub fn get_commit_messages_for_squash(repo: &Repository, count: usize) -> Result<Vec<String>> {
+    let mut messages = Vec::new();
+
+    let mut revwalk = repo.revwalk()?;
+    revwalk.push_head()?;
+
+    for oid in revwalk.take(count) {
+        let oid = oid?;
+        let commit = repo.find_commit(oid)?;
+        if let Some(msg) = commit.message() {
+            messages.push(msg.to_string());
+        }
+    }
+
+    Ok(messages)
+}
