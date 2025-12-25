@@ -376,6 +376,28 @@ Output ONLY the resolved code, nothing else."#;
 
         self.send_message(system_prompt, &user_content).await
     }
+
+    /// Generate a squash commit message from multiple commits
+    pub async fn generate_squash_message(&self, commits_text: &str) -> Result<String> {
+        let system_prompt = r#"You are an expert at writing clear, concise git commit messages.
+
+Given multiple commit messages, create a single unified commit message that:
+1. Summarizes all the changes in one coherent message
+2. Follows Conventional Commits format: <type>(<scope>): <description>
+3. Keeps the first line under 72 characters
+4. Uses imperative mood
+5. Captures the overall intent of all commits
+
+Output ONLY the commit message, nothing else."#;
+
+        let user_content = format!(
+            "Summarize these commits into one message:\n\n{}",
+            commits_text
+        );
+
+        let response = self.send_message(system_prompt, &user_content).await?;
+        Ok(response.trim().to_string())
+    }
 }
 
 /// Suggestion for an atomic commit
