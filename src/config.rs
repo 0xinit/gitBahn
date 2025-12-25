@@ -28,6 +28,10 @@ pub struct Config {
     #[serde(default)]
     pub commit: CommitConfig,
 
+    /// Auto mode settings
+    #[serde(default)]
+    pub auto: AutoConfig,
+
     /// Documentation settings
     #[serde(default)]
     pub docs: DocsConfig,
@@ -110,6 +114,53 @@ impl Default for CommitConfig {
             sign: false,
             default_agent: None,
             template: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoConfig {
+    /// Watch interval in seconds (0 for event-based)
+    #[serde(default = "default_interval")]
+    pub interval: u64,
+
+    /// Maximum commits before stopping
+    #[serde(default = "default_max_commits")]
+    pub max_commits: usize,
+
+    /// Enable history rewriting (squash commits)
+    #[serde(default)]
+    pub rewrite_history: bool,
+
+    /// Number of commits before auto-squash triggers
+    #[serde(default = "default_squash_threshold")]
+    pub squash_threshold: usize,
+
+    /// Auto-push after squash
+    #[serde(default)]
+    pub auto_push: bool,
+}
+
+fn default_interval() -> u64 {
+    30
+}
+
+fn default_max_commits() -> usize {
+    100
+}
+
+fn default_squash_threshold() -> usize {
+    5
+}
+
+impl Default for AutoConfig {
+    fn default() -> Self {
+        Self {
+            interval: default_interval(),
+            max_commits: default_max_commits(),
+            rewrite_history: false,
+            squash_threshold: default_squash_threshold(),
+            auto_push: false,
         }
     }
 }
