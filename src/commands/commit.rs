@@ -191,21 +191,128 @@ async fn run_atomic_commits(
         println!();
     }
 
-    // Currently, atomic commits would require more complex git operations
-    // to stage specific files per commit. For now, offer to create single commit.
-    println!("{}", "Note: Creating atomic commits requires manual staging per commit.".yellow());
-    println!("You can manually stage files and run bahn commit for each group.\n");
-
-    // Offer to create first commit with all changes
-    let confirm = Confirm::new()
-        .with_prompt("Create a single commit with all changes instead?")
-        .default(true)
-        .interact()?;
-
-    if confirm {
-        run_single_commit(repo, changes, ai, context, personality, options).await
+    // Ask for confirmation unless auto_confirm is set
+    let proceed = if options.auto_confirm {
+        true
     } else {
-        println!("{}", "Commit cancelled.".yellow());
-        Ok(())
+        let choices = vec!["Create all atomic commits", "Create single commit instead", "Cancel"];
+        let selection = Select::new()
+            .with_prompt("What would you like to do?")
+            .items(&choices)
+            .default(0)
+            .interact()?;
+
+        match selection {
+            0 => true,  // Proceed with atomic commits
+            1 => {
+                // Fall back to single commit
+                return run_single_commit(repo, changes, ai, context, personality, options).await;
+            }
+            _ => {
+                println!("{}", "Commit cancelled.".yellow());
+                return Ok(());
+            }
+        }
+    };
+
+    if !proceed {
+        return Ok(());
     }
+
+    // Reset staging area first
+    git::reset_index(repo)?;
+
+    let total = suggestions.len();
+    let mut created = 0;
+
+    println!("\n{}", "Creating atomic commits...".bold());
+
+    for (i, suggestion) in suggestions.iter().enumerate() {
+        // Stage only the files for this commit
+        let file_refs: Vec<&str> = suggestion.files.iter().map(|s| s.as_str()).collect();
+
+        // Some files might not exist in working tree (AI hallucination), filter them
+        let valid_files: Vec<&str> = file_refs.iter()
+            .filter(|f| {
+                let all_files = changes.all_files();
+                all_files.contains(f)
+            })
+            .copied()
+            .collect();
+
+        if valid_files.is_empty() {
+            println!("  {} Skipping group {}/{}: no valid files",
+                "→".dimmed(),
+                i + 1,
+                total
+            );
+            continue;
+        }
+
+        git::stage_files(repo, &valid_files)?;
+
+        // Verify something is staged
+        let repo_fresh = git::open_repo(None)?;
+        let staged = git::get_staged_changes(&repo_fresh)?;
+
+        if staged.is_empty() {
+            println!("  {} Skipping group {}/{}: nothing staged",
+                "→".dimmed(),
+                i + 1,
+                total
+            );
+            continue;
+        }
+
+        // Create the commit
+        let oid = git::create_commit(&repo_fresh, &suggestion.message, false)?;
+        created += 1;
+
+        println!("  {} [{}/{}] {} - {}",
+            "✓".green().bold(),
+            created,
+            total,
+            oid.to_string()[..7].cyan(),
+            suggestion.message.lines().next().unwrap_or("")
+        );
+    }
+
+    // Check if there are any remaining unstaged changes
+    let repo_final = git::open_repo(None)?;
+    if git::has_uncommitted_changes(&repo_final)? {
+        println!("\n{} Some files weren't included in atomic groups.",
+            "Note:".yellow()
+        );
+
+        let confirm = Confirm::new()
+            .with_prompt("Commit remaining changes?")
+            .default(true)
+            .interact()?;
+
+        if confirm {
+            git::stage_all(&repo_final)?;
+            let remaining = git::get_staged_changes(&repo_final)?;
+
+            if !remaining.is_empty() {
+                let message = ai.generate_commit_message(&remaining.diff, context, personality).await?;
+                let oid = git::create_commit(&repo_final, &message, false)?;
+                created += 1;
+
+                println!("  {} [{}/{}] {} - {}",
+                    "✓".green().bold(),
+                    created,
+                    total + 1,
+                    oid.to_string()[..7].cyan(),
+                    message.lines().next().unwrap_or("")
+                );
+            }
+        }
+    }
+
+    println!("\n{} Created {} atomic commits.",
+        "✓".green().bold(),
+        created.to_string().cyan()
+    );
+
+    Ok(())
 }
