@@ -8,3 +8,4 @@ Cargo.lock
 .bahn.lock
 /plans/
 .claude
+/docs/
