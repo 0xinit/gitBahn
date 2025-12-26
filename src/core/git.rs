@@ -3,7 +3,8 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use git2::{DiffOptions, IndexAddOption, Repository, StatusOptions};
+use chrono::{DateTime, Local};
+use git2::{DiffOptions, IndexAddOption, Repository, Signature, StatusOptions, Time};
 
 /// Information about staged changes
 #[derive(Debug, Clone)]
@@ -185,7 +186,30 @@ pub fn get_staged_changes(repo: &Repository) -> Result<StagedChanges> {
 
 /// Create a commit with the staged changes
 pub fn create_commit(repo: &Repository, message: &str, sign: bool) -> Result<git2::Oid> {
-    let signature = repo.signature()?;
+    create_commit_at(repo, message, sign, None)
+}
+
+/// Create a commit with a specific timestamp
+pub fn create_commit_at(
+    repo: &Repository,
+    message: &str,
+    sign: bool,
+    timestamp: Option<DateTime<Local>>,
+) -> Result<git2::Oid> {
+    let config = repo.config()?;
+    let name = config.get_string("user.name")
+        .unwrap_or_else(|_| "Unknown".to_string());
+    let email = config.get_string("user.email")
+        .unwrap_or_else(|_| "unknown@example.com".to_string());
+
+    let signature = if let Some(ts) = timestamp {
+        // Create signature with custom timestamp
+        let time = Time::new(ts.timestamp(), ts.offset().local_minus_utc() / 60);
+        Signature::new(&name, &email, &time)?
+    } else {
+        repo.signature()?
+    };
+
     let mut index = repo.index()?;
     let tree_id = index.write_tree()?;
     let tree = repo.find_tree(tree_id)?;
