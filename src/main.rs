@@ -39,6 +39,14 @@ enum Commands {
         /// Auto-confirm without prompting
         #[arg(short = 'y', long)]
         yes: bool,
+
+        /// Spread atomic commits over time (e.g., "2h", "30m", "1d")
+        #[arg(long)]
+        spread: Option<String>,
+
+        /// Start time for atomic commits (e.g., "2025-12-25 09:00")
+        #[arg(long)]
+        start: Option<String>,
     },
 
     /// Autonomous mode - watch and auto-commit
@@ -133,13 +141,15 @@ async fn main() -> Result<()> {
     let config = Config::load(None)?;
 
     match cli.command {
-        Commands::Commit { atomic, conventional, agent, yes } => {
+        Commands::Commit { atomic, conventional, agent, yes, spread, start } => {
             let options = commands::commit::CommitOptions {
                 atomic,
                 conventional,
                 agent,
                 auto_confirm: yes,
                 verbose: cli.verbose,
+                spread,
+                start,
             };
             commands::commit::run(options, &config).await
         }
