@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use git2::{DiffOptions, Repository, StatusOptions};
+use git2::{DiffOptions, IndexAddOption, Repository, StatusOptions};
 
 /// Information about staged changes
 #[derive(Debug, Clone)]
@@ -224,6 +224,44 @@ pub fn create_commit(repo: &Repository, message: &str, sign: bool) -> Result<git
     };
 
     Ok(commit_id)
+}
+
+/// Stage specific files (add to index)
+pub fn stage_files(repo: &Repository, files: &[&str]) -> Result<()> {
+    let mut index = repo.index()?;
+
+    for file in files {
+        let path = Path::new(file);
+
+        // Check if file exists (for adds/modifications) or was deleted
+        let workdir = repo.workdir().context("Not a working directory")?;
+        let full_path = workdir.join(path);
+
+        if full_path.exists() {
+            index.add_path(path)?;
+        } else {
+            // File was deleted, remove from index
+            index.remove_path(path)?;
+        }
+    }
+
+    index.write()?;
+    Ok(())
+}
+
+/// Reset the staging area (unstage all files)
+pub fn reset_index(repo: &Repository) -> Result<()> {
+    let head = repo.head()?.peel_to_commit()?;
+    repo.reset(head.as_object(), git2::ResetType::Mixed, None)?;
+    Ok(())
+}
+
+/// Stage all changes (like git add -A)
+pub fn stage_all(repo: &Repository) -> Result<()> {
+    let mut index = repo.index()?;
+    index.add_all(["*"].iter(), IndexAddOption::DEFAULT, None)?;
+    index.write()?;
+    Ok(())
 }
 
 /// Get recent commit messages for context
