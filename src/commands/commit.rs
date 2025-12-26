@@ -1,9 +1,11 @@
 //! Commit command - generate and create commits.
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Duration, Local, NaiveDateTime, TimeZone};
 use colored::Colorize;
 use dialoguer::{Confirm, Editor, Select};
 use indicatif::{ProgressBar, ProgressStyle};
+use rand::Rng;
 
 use crate::config::Config;
 use crate::core::ai::AiClient;
@@ -17,6 +19,124 @@ pub struct CommitOptions {
     pub agent: Option<String>,
     pub auto_confirm: bool,
     pub verbose: bool,
+    /// Spread atomic commits over time (e.g., "2h", "30m", "1d")
+    pub spread: Option<String>,
+    /// Start time for atomic commits (e.g., "2025-12-25 09:00")
+    pub start: Option<String>,
+}
+
+/// Parse a duration string like "2h", "30m", "1d" into seconds
+fn parse_duration(s: &str) -> Result<i64> {
+    let s = s.trim().to_lowercase();
+    let (num_str, unit) = if s.ends_with('d') {
+        (&s[..s.len()-1], "d")
+    } else if s.ends_with('h') {
+        (&s[..s.len()-1], "h")
+    } else if s.ends_with('m') {
+        (&s[..s.len()-1], "m")
+    } else if s.ends_with('s') {
+        (&s[..s.len()-1], "s")
+    } else {
+        // Default to hours if no unit
+        (s.as_str(), "h")
+    };
+
+    let num: i64 = num_str.parse()
+        .context(format!("Invalid duration number: {}", num_str))?;
+
+    let seconds = match unit {
+        "d" => num * 86400,
+        "h" => num * 3600,
+        "m" => num * 60,
+        "s" => num,
+        _ => num * 3600,
+    };
+
+    Ok(seconds)
+}
+
+/// Parse a datetime string like "2025-12-25 09:00" into a DateTime
+fn parse_start_time(s: &str) -> Result<DateTime<Local>> {
+    // Try parsing with time
+    if let Ok(naive) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M") {
+        return Local.from_local_datetime(&naive).single()
+            .context("Invalid local datetime");
+    }
+    if let Ok(naive) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+        return Local.from_local_datetime(&naive).single()
+            .context("Invalid local datetime");
+    }
+    // Try parsing date only (use 9:00 AM as default)
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        let naive = date.and_hms_opt(9, 0, 0).context("Invalid time")?;
+        return Local.from_local_datetime(&naive).single()
+            .context("Invalid local datetime");
+    }
+
+    anyhow::bail!("Invalid datetime format: {}. Use YYYY-MM-DD HH:MM", s)
+}
+
+/// Generate realistic timestamps for commits spread over a duration
+/// Returns timestamps with random gaps that look like natural coding sessions
+fn generate_spread_timestamps(
+    count: usize,
+    start: DateTime<Local>,
+    total_duration_secs: i64,
+) -> Vec<DateTime<Local>> {
+    if count == 0 {
+        return vec![];
+    }
+    if count == 1 {
+        return vec![start];
+    }
+
+    let mut rng = rand::thread_rng();
+    let mut timestamps = Vec::with_capacity(count);
+
+    // Calculate base interval between commits
+    let base_interval = total_duration_secs / (count as i64);
+
+    // Generate timestamps with some randomness
+    let mut current = start;
+    for i in 0..count {
+        timestamps.push(current);
+
+        if i < count - 1 {
+            // Add some variance: 50% to 150% of base interval
+            let variance = rng.gen_range(0.5..1.5);
+            let interval = (base_interval as f64 * variance) as i64;
+
+            // Add random seconds for human-like timestamps (not round minutes)
+            let extra_secs = rng.gen_range(0..60);
+
+            current += Duration::seconds(interval.max(60) + extra_secs);
+        }
+    }
+
+    // If we overshot, scale back proportionally
+    if let Some(last) = timestamps.last() {
+        let actual_duration = (*last - start).num_seconds();
+        if actual_duration > total_duration_secs {
+            let scale = total_duration_secs as f64 / actual_duration as f64;
+            timestamps = timestamps.iter().enumerate().map(|(i, _)| {
+                if i == 0 {
+                    start
+                } else {
+                    let offset = (timestamps[i] - start).num_seconds();
+                    let scaled_offset = (offset as f64 * scale) as i64;
+                    start + Duration::seconds(scaled_offset)
+                }
+            }).collect();
+        }
+    }
+
+    timestamps
+}
+
+/// Generate default realistic spread (2-4 hours like a coding session)
+fn default_spread_duration() -> i64 {
+    let mut rng = rand::thread_rng();
+    rng.gen_range(2..=4) * 3600 // 2-4 hours in seconds
 }
 
 /// Run the commit command
@@ -182,10 +302,32 @@ async fn run_atomic_commits(
         return run_single_commit(repo, changes, ai, context, personality, options).await;
     }
 
+    // Generate timestamps for commits
+    let start_time = if let Some(ref start_str) = options.start {
+        parse_start_time(start_str)?
+    } else {
+        Local::now()
+    };
+
+    let spread_duration = if let Some(ref spread_str) = options.spread {
+        parse_duration(spread_str)?
+    } else {
+        default_spread_duration()
+    };
+
+    let timestamps = generate_spread_timestamps(suggestions.len(), start_time, spread_duration);
+
     println!("{} atomic commits suggested:\n", suggestions.len().to_string().cyan().bold());
 
     for (i, suggestion) in suggestions.iter().enumerate() {
-        println!("{}. {}", (i + 1).to_string().bold(), suggestion.message.green());
+        let ts_str = timestamps.get(i)
+            .map(|t| t.format("%b %d, %H:%M:%S").to_string())
+            .unwrap_or_default();
+        println!("{}. {} → {}",
+            (i + 1).to_string().bold(),
+            suggestion.message.green(),
+            ts_str.dimmed()
+        );
         println!("   Files: {}", suggestion.files.join(", ").dimmed());
         println!("   {}", suggestion.description.dimmed());
         println!();
@@ -264,15 +406,20 @@ async fn run_atomic_commits(
             continue;
         }
 
-        // Create the commit
-        let oid = git::create_commit(&repo_fresh, &suggestion.message, false)?;
+        // Create the commit with timestamp
+        let commit_time = timestamps.get(i).copied();
+        let oid = git::create_commit_at(&repo_fresh, &suggestion.message, false, commit_time)?;
         created += 1;
 
-        println!("  {} [{}/{}] {} - {}",
+        let ts_str = commit_time
+            .map(|t| t.format("%H:%M:%S").to_string())
+            .unwrap_or_else(|| "now".to_string());
+        println!("  {} [{}/{}] {} @ {} - {}",
             "✓".green().bold(),
             created,
             total,
             oid.to_string()[..7].cyan(),
+            ts_str.dimmed(),
             suggestion.message.lines().next().unwrap_or("")
         );
     }
