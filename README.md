@@ -42,6 +42,12 @@ bahn commit
 # Split into atomic commits
 bahn commit --atomic
 
+# Atomic commits with spread timestamps (human-like)
+bahn commit --atomic --spread 4h
+
+# Atomic commits with custom start time
+bahn commit --atomic --spread 4h --start "2025-01-05 09:00"
+
 # Auto-confirm without prompting
 bahn commit -y
 ```

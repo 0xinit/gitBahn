@@ -275,8 +275,20 @@ pub fn stage_files(repo: &Repository, files: &[&str]) -> Result<()> {
 
 /// Reset the staging area (unstage all files)
 pub fn reset_index(repo: &Repository) -> Result<()> {
-    let head = repo.head()?.peel_to_commit()?;
-    repo.reset(head.as_object(), git2::ResetType::Mixed, None)?;
+    // Handle unborn branch (no commits yet)
+    match repo.head() {
+        Ok(head) => {
+            if let Ok(commit) = head.peel_to_commit() {
+                repo.reset(commit.as_object(), git2::ResetType::Mixed, None)?;
+            }
+        }
+        Err(_) => {
+            // Unborn branch - just clear the index
+            let mut index = repo.index()?;
+            index.clear()?;
+            index.write()?;
+        }
+    }
     Ok(())
 }
 
