@@ -295,6 +295,7 @@ async fn run_prompt_watch_mode(ai: &AiClient, options: &AutoOptions) -> Result<(
 
     let mut commit_count = 0;
     let mut batch = CommitBatch::new();
+    let mut session_messages: Vec<String> = Vec::new(); // Track all messages in session
     let mut shutdown = false;
 
     while !shutdown && commit_count < options.max_commits {
@@ -324,8 +325,22 @@ async fn run_prompt_watch_mode(ai: &AiClient, options: &AutoOptions) -> Result<(
                     changes.stats.deletions.to_string().red()
                 );
 
-                // Generate commit message
-                let message = ai.generate_commit_message(&changes.diff, None, None).await?;
+                // Build context from previous session messages
+                let session_context = if session_messages.is_empty() {
+                    None
+                } else {
+                    Some(format!(
+                        "Previous commits in this session (DO NOT repeat these - write something different):\n{}",
+                        session_messages.iter()
+                            .enumerate()
+                            .map(|(i, m)| format!("  {}. {}", i + 1, m))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    ))
+                };
+
+                // Generate commit message with context
+                let message = ai.generate_commit_message(&changes.diff, session_context.as_deref(), None).await?;
                 println!("  Suggested: {}", message.lines().next().unwrap_or("").cyan());
 
                 // Prompt user
@@ -350,6 +365,7 @@ async fn run_prompt_watch_mode(ai: &AiClient, options: &AutoOptions) -> Result<(
                         } else {
                             let oid = git::create_commit(&repo, &message, false)?;
                             commit_count += 1;
+                            session_messages.push(message.clone());
                             println!("{} Committed: {} - {}",
                                 "✓".green().bold(),
                                 oid.to_string()[..7].cyan(),
@@ -374,6 +390,7 @@ async fn run_prompt_watch_mode(ai: &AiClient, options: &AutoOptions) -> Result<(
                         } else {
                             let oid = git::create_commit_at(&repo, &message, false, Some(timestamp))?;
                             commit_count += 1;
+                            session_messages.push(message.clone());
                             println!("{} Committed at {}: {} - {}",
                                 "✓".green().bold(),
                                 timestamp.format("%H:%M:%S").to_string().dimmed(),
@@ -385,12 +402,13 @@ async fn run_prompt_watch_mode(ai: &AiClient, options: &AutoOptions) -> Result<(
                     2 => {
                         // Add to batch
                         let deferred = DeferredCommit {
-                            message,
+                            message: message.clone(),
                             diff: changes.diff.clone(),
                             files: changes.all_files().iter().map(|s| s.to_string()).collect(),
                             timestamp: None,
                         };
                         batch.add(deferred);
+                        session_messages.push(message); // Track batched messages too
                         println!("{} Added to batch ({} pending)",
                             "→".blue(),
                             batch.len()
@@ -567,8 +585,29 @@ async fn run_defer_watch_mode(ai: &AiClient, options: &AutoOptions) -> Result<()
                     continue;
                 }
 
-                // Generate commit message
-                let message = ai.generate_commit_message(&changes.diff, None, None).await?;
+                // Build context from previous session messages to avoid repetition
+                let session_context = if deferred_commits.is_empty() {
+                    None
+                } else {
+                    let prev_messages: Vec<String> = deferred_commits.iter()
+                        .map(|d| d.message.clone())
+                        .collect();
+                    Some(format!(
+                        "Previous commits in this session (DO NOT repeat these - write something different):\n{}",
+                        prev_messages.iter()
+                            .enumerate()
+                            .map(|(i, m)| format!("  {}. {}", i + 1, m))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    ))
+                };
+
+                // Generate commit message with context
+                let message = ai.generate_commit_message(
+                    &changes.diff,
+                    session_context.as_deref(),
+                    None
+                ).await?;
 
                 let deferred = DeferredCommit {
                     message: message.clone(),
