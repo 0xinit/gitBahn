@@ -10,6 +10,7 @@ use git2::{DiffOptions, IndexAddOption, Repository, Signature, StatusOptions, Ti
 
 /// A single hunk (chunk) of changes within a file
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct DiffHunk {
     /// Unique identifier for this hunk
     pub id: usize,
@@ -33,6 +34,7 @@ pub struct DiffHunk {
 
 impl DiffHunk {
     /// Get a summary for display
+    #[allow(dead_code)]
     pub fn summary(&self) -> String {
         format!("{}:{} (+{}, -{})",
             self.file_path,
