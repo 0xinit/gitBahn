@@ -304,8 +304,20 @@ pub fn stage_all(repo: &Repository) -> Result<()> {
 pub fn get_recent_commits(repo: &Repository, count: usize) -> Result<Vec<String>> {
     let mut messages = Vec::new();
 
+    // Handle unborn branch (no commits yet)
+    let head = match repo.head() {
+        Ok(h) => h,
+        Err(_) => return Ok(messages), // Return empty for new repos
+    };
+
+    if head.target().is_none() {
+        return Ok(messages);
+    }
+
     let mut revwalk = repo.revwalk()?;
-    revwalk.push_head()?;
+    if revwalk.push_head().is_err() {
+        return Ok(messages);
+    }
 
     for oid in revwalk.take(count) {
         let oid = oid?;
@@ -373,7 +385,15 @@ pub fn has_unpushed_commits(repo: &Repository) -> Result<bool> {
 
 /// Count unpushed commits
 pub fn count_unpushed_commits(repo: &Repository) -> Result<usize> {
-    let head = repo.head()?;
+    // Handle unborn branch (no commits yet)
+    let head = match repo.head() {
+        Ok(h) => h,
+        Err(_) => return Ok(0),
+    };
+
+    if head.target().is_none() {
+        return Ok(0);
+    }
 
     // Try to find upstream branch
     if let Ok(branch) = repo.find_branch(
@@ -394,7 +414,9 @@ pub fn count_unpushed_commits(repo: &Repository) -> Result<usize> {
 
     // No upstream, count all commits
     let mut revwalk = repo.revwalk()?;
-    revwalk.push_head()?;
+    if revwalk.push_head().is_err() {
+        return Ok(0);
+    }
     Ok(revwalk.count())
 }
 
@@ -465,8 +487,15 @@ pub fn amend_last_commit(repo: &Repository, new_message: &str) -> Result<git2::O
 pub fn get_commit_messages_for_squash(repo: &Repository, count: usize) -> Result<Vec<String>> {
     let mut messages = Vec::new();
 
+    // Handle unborn branch
+    if repo.head().is_err() {
+        return Ok(messages);
+    }
+
     let mut revwalk = repo.revwalk()?;
-    revwalk.push_head()?;
+    if revwalk.push_head().is_err() {
+        return Ok(messages);
+    }
 
     for oid in revwalk.take(count) {
         let oid = oid?;
