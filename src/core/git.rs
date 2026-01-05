@@ -342,7 +342,22 @@ pub fn has_uncommitted_changes(repo: &Repository) -> Result<bool> {
 
 /// Get the current branch name
 pub fn current_branch(repo: &Repository) -> Result<String> {
-    let head = repo.head()?;
+    // Handle unborn branch (no commits yet)
+    let head = match repo.head() {
+        Ok(h) => h,
+        Err(_) => {
+            // Try to get branch name from HEAD reference
+            if let Ok(head_ref) = repo.find_reference("HEAD") {
+                if let Some(target) = head_ref.symbolic_target() {
+                    // Extract branch name from refs/heads/master -> master
+                    if let Some(branch) = target.strip_prefix("refs/heads/") {
+                        return Ok(branch.to_string());
+                    }
+                }
+            }
+            return Ok("master".to_string()); // Default fallback
+        }
+    };
 
     if head.is_branch() {
         Ok(head
