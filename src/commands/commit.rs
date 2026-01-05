@@ -8,7 +8,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use rand::Rng;
 
 use crate::config::Config;
-use crate::core::ai::AiClient;
+use crate::core::ai::{AiClient, HunkInfo};
 use crate::core::git;
 
 /// Options for the commit command
@@ -16,6 +16,8 @@ pub struct CommitOptions {
     pub atomic: bool,
     /// Target number of commits to split into
     pub split: Option<usize>,
+    /// Split individual files into hunks for ultra-realistic commits
+    pub granular: bool,
     #[allow(dead_code)] // Will be used when custom templates are implemented
     pub conventional: bool,
     pub agent: Option<String>,
@@ -204,7 +206,9 @@ pub async fn run(options: CommitOptions, config: &Config) -> Result<()> {
     let personality = options.agent.as_deref()
         .or(config.commit.default_agent.as_deref());
 
-    if options.atomic {
+    if options.granular {
+        run_granular_commits(&repo, &changes, &ai, context.as_deref(), personality, &options).await
+    } else if options.atomic {
         run_atomic_commits(&repo, &changes, &ai, context.as_deref(), personality, &options).await
     } else {
         run_single_commit(&repo, &changes, &ai, context.as_deref(), personality, &options).await
@@ -459,6 +463,236 @@ async fn run_atomic_commits(
     }
 
     println!("\n{} Created {} atomic commits.",
+        "✓".green().bold(),
+        created.to_string().cyan()
+    );
+
+    Ok(())
+}
+
+async fn run_granular_commits(
+    repo: &git2::Repository,
+    changes: &git::StagedChanges,
+    ai: &AiClient,
+    _context: Option<&str>,
+    _personality: Option<&str>,
+    options: &CommitOptions,
+) -> Result<()> {
+    // Show progress
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(ProgressStyle::default_spinner()
+        .template("{spinner:.green} {msg}")
+        .unwrap());
+    pb.set_message("Parsing diff into hunks...");
+
+    // Parse the diff into individual hunks
+    let hunks = git::parse_diff_into_hunks(&changes.diff);
+
+    if hunks.is_empty() {
+        pb.finish_and_clear();
+        println!("{}", "No hunks found in staged changes.".yellow());
+        return Ok(());
+    }
+
+    pb.set_message(format!("Found {} hunks, analyzing...", hunks.len()));
+
+    // Convert to HunkInfo for AI
+    let hunk_infos: Vec<HunkInfo> = hunks.iter().map(|h| {
+        // Create a preview of the content (first 100 chars of added lines)
+        let preview: String = h.content.lines()
+            .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
+            .take(2)
+            .map(|l| l.trim_start_matches('+').trim())
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(100)
+            .collect();
+
+        HunkInfo {
+            id: h.id,
+            file_path: h.file_path.clone(),
+            is_new_file: h.is_new_file,
+            is_deleted: h.is_deleted,
+            additions: h.additions,
+            deletions: h.deletions,
+            context: h.context.clone(),
+            content_preview: preview,
+        }
+    }).collect();
+
+    // Get AI suggestions for grouping hunks
+    let suggestions = ai.suggest_granular_commits(&hunk_infos, options.split).await?;
+
+    pb.finish_and_clear();
+
+    if suggestions.is_empty() {
+        println!("{}", "No commit suggestions generated.".yellow());
+        return Ok(());
+    }
+
+    // Generate timestamps for commits
+    let start_time = if let Some(ref start_str) = options.start {
+        parse_start_time(start_str)?
+    } else {
+        Local::now()
+    };
+
+    let spread_duration = if let Some(ref spread_str) = options.spread {
+        parse_duration(spread_str)?
+    } else {
+        default_spread_duration()
+    };
+
+    let timestamps = generate_spread_timestamps(suggestions.len(), start_time, spread_duration);
+
+    println!("{} granular commits suggested (from {} hunks):\n",
+        suggestions.len().to_string().cyan().bold(),
+        hunks.len()
+    );
+
+    for (i, suggestion) in suggestions.iter().enumerate() {
+        let ts_str = timestamps.get(i)
+            .map(|t| t.format("%b %d, %H:%M:%S").to_string())
+            .unwrap_or_default();
+
+        // Show which files/hunks are involved
+        let hunk_files: Vec<&str> = suggestion.hunk_ids.iter()
+            .filter_map(|id| hunks.iter().find(|h| h.id == *id))
+            .map(|h| h.file_path.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        println!("{}. {} → {}",
+            (i + 1).to_string().bold(),
+            suggestion.message.green(),
+            ts_str.dimmed()
+        );
+        println!("   Hunks: {} | Files: {}",
+            suggestion.hunk_ids.iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+                .dimmed(),
+            hunk_files.join(", ").dimmed()
+        );
+        println!("   {}", suggestion.description.dimmed());
+        println!();
+    }
+
+    // Ask for confirmation unless auto_confirm is set
+    let proceed = if options.auto_confirm {
+        true
+    } else {
+        let choices = vec!["Create all granular commits", "Cancel"];
+        let selection = Select::new()
+            .with_prompt("What would you like to do?")
+            .items(&choices)
+            .default(0)
+            .interact()?;
+
+        selection == 0
+    };
+
+    if !proceed {
+        println!("{}", "Commit cancelled.".yellow());
+        return Ok(());
+    }
+
+    // Reset staging area first
+    git::reset_index(repo)?;
+
+    let total = suggestions.len();
+    let mut created = 0;
+
+    println!("\n{}", "Creating granular commits...".bold());
+
+    let repo_path = repo.workdir()
+        .context("Repository has no working directory")?;
+
+    for (i, suggestion) in suggestions.iter().enumerate() {
+        // Get the hunks for this commit
+        let commit_hunks: Vec<&git::DiffHunk> = suggestion.hunk_ids.iter()
+            .filter_map(|id| hunks.iter().find(|h| h.id == *id))
+            .collect();
+
+        if commit_hunks.is_empty() {
+            println!("  {} Skipping commit {}/{}: no valid hunks",
+                "→".dimmed(),
+                i + 1,
+                total
+            );
+            continue;
+        }
+
+        // Stage the hunks for this commit
+        git::stage_hunks(repo_path, &commit_hunks)?;
+
+        // Verify something is staged
+        let repo_fresh = git::open_repo(None)?;
+        let staged = git::get_staged_changes(&repo_fresh)?;
+
+        if staged.is_empty() {
+            println!("  {} Skipping commit {}/{}: nothing staged",
+                "→".dimmed(),
+                i + 1,
+                total
+            );
+            continue;
+        }
+
+        // Create the commit with timestamp
+        let commit_time = timestamps.get(i).copied();
+        let oid = git::create_commit_at(&repo_fresh, &suggestion.message, false, commit_time)?;
+        created += 1;
+
+        let ts_str = commit_time
+            .map(|t| t.format("%H:%M:%S").to_string())
+            .unwrap_or_else(|| "now".to_string());
+        println!("  {} [{}/{}] {} @ {} - {}",
+            "✓".green().bold(),
+            created,
+            total,
+            oid.to_string()[..7].cyan(),
+            ts_str.dimmed(),
+            suggestion.message.lines().next().unwrap_or("")
+        );
+    }
+
+    // Check if there are any remaining unstaged changes
+    let repo_final = git::open_repo(None)?;
+    if git::has_uncommitted_changes(&repo_final)? {
+        println!("\n{} Some hunks weren't included in commits.",
+            "Note:".yellow()
+        );
+
+        let confirm = Confirm::new()
+            .with_prompt("Commit remaining changes?")
+            .default(true)
+            .interact()?;
+
+        if confirm {
+            git::stage_all(&repo_final)?;
+            let remaining = git::get_staged_changes(&repo_final)?;
+
+            if !remaining.is_empty() {
+                let message = ai.generate_commit_message(&remaining.diff, None, None).await?;
+                let oid = git::create_commit(&repo_final, &message, false)?;
+                created += 1;
+
+                println!("  {} [{}/{}] {} - {}",
+                    "✓".green().bold(),
+                    created,
+                    total + 1,
+                    oid.to_string()[..7].cyan(),
+                    message.lines().next().unwrap_or("")
+                );
+            }
+        }
+    }
+
+    println!("\n{} Created {} granular commits.",
         "✓".green().bold(),
         created.to_string().cyan()
     );

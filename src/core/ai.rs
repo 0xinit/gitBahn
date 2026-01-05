@@ -154,6 +154,81 @@ If the changes should be a single commit, return just one item in the array."#,
         Ok(parsed.commits)
     }
 
+    /// Generate granular commit suggestions based on individual hunks
+    /// This allows splitting single files across multiple commits for more realistic history
+    pub async fn suggest_granular_commits(
+        &self,
+        hunks: &[HunkInfo],
+        target_count: Option<usize>,
+    ) -> Result<Vec<GranularCommitSuggestion>> {
+        let target_instruction = if let Some(count) = target_count {
+            format!(
+                "\n\nIMPORTANT: Create EXACTLY {} commits. \
+                Distribute hunks evenly across {} commits, grouping related changes together. \
+                Each commit should represent a realistic incremental step in development.",
+                count, count
+            )
+        } else {
+            String::new()
+        };
+
+        let system_prompt = format!(
+            r#"You are an expert at analyzing code changes and creating realistic commit history.
+
+You are given a list of "hunks" - individual chunks of changes within files.
+Your task is to group these hunks into commits that look like natural, incremental development.
+
+Rules:
+1. Group related hunks together (same feature, same logical change)
+2. A single file CAN be split across multiple commits if it has unrelated changes
+3. Earlier commits should be foundational (imports, types, struct definitions)
+4. Later commits should build on earlier ones (implementations, tests)
+5. Each commit should compile on its own (don't separate a function signature from its body)
+6. Make it look like a human developed this incrementally, not all at once
+7. Each commit message must be UNIQUE - never repeat messages{}
+
+Respond in JSON format:
+{{
+  "commits": [
+    {{
+      "message": "feat(auth): add User struct and types",
+      "hunk_ids": [0, 2, 5],
+      "description": "Foundation for user authentication"
+    }}
+  ]
+}}
+
+The hunk_ids are the IDs provided in the hunk list. Each hunk should appear in exactly one commit."#,
+            target_instruction
+        );
+
+        // Build a compact representation of hunks for the AI
+        let mut user_content = String::new();
+        user_content.push_str("Hunks to organize into commits:\n\n");
+
+        for hunk in hunks {
+            user_content.push_str(&format!(
+                "Hunk {} ({}{}):\n  File: {}\n  Changes: +{} -{}\n  Context: {}\n  Content preview: {}\n\n",
+                hunk.id,
+                if hunk.is_new_file { "NEW " } else { "" },
+                if hunk.is_deleted { "DELETED " } else { "" },
+                hunk.file_path,
+                hunk.additions,
+                hunk.deletions,
+                hunk.context,
+                hunk.content_preview
+            ));
+        }
+
+        let response = self.send_message(&system_prompt, &user_content).await?;
+
+        let json_str = extract_json(&response);
+        let parsed: GranularCommitsResponse = serde_json::from_str(json_str)
+            .with_context(|| format!("Failed to parse granular commits response: {}", &response[..200.min(response.len())]))?;
+
+        Ok(parsed.commits)
+    }
+
     /// Generate documentation for code
     pub async fn generate_docs(
         &self,
@@ -430,6 +505,32 @@ pub struct AtomicCommitSuggestion {
 #[derive(Debug, Deserialize)]
 struct AtomicCommitsResponse {
     commits: Vec<AtomicCommitSuggestion>,
+}
+
+/// Simplified hunk info for AI analysis
+#[derive(Debug)]
+pub struct HunkInfo {
+    pub id: usize,
+    pub file_path: String,
+    pub is_new_file: bool,
+    pub is_deleted: bool,
+    pub additions: usize,
+    pub deletions: usize,
+    pub context: String,
+    pub content_preview: String,
+}
+
+/// Suggestion for a granular commit (hunk-level)
+#[derive(Debug, Deserialize)]
+pub struct GranularCommitSuggestion {
+    pub message: String,
+    pub hunk_ids: Vec<usize>,
+    pub description: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GranularCommitsResponse {
+    commits: Vec<GranularCommitSuggestion>,
 }
 
 /// Code review result

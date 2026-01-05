@@ -32,6 +32,10 @@ enum Commands {
         #[arg(long)]
         split: Option<usize>,
 
+        /// Split individual files into hunks for ultra-realistic commits
+        #[arg(short, long)]
+        granular: bool,
+
         /// Use conventional commit format
         #[arg(long)]
         conventional: bool,
@@ -161,10 +165,11 @@ async fn main() -> Result<()> {
     let config = Config::load(None)?;
 
     match cli.command {
-        Commands::Commit { atomic, split, conventional, agent, yes, spread, start } => {
+        Commands::Commit { atomic, split, granular, conventional, agent, yes, spread, start } => {
             let options = commands::commit::CommitOptions {
-                atomic: atomic || split.is_some(), // --split implies --atomic
+                atomic: atomic || split.is_some() || granular, // --split or --granular implies --atomic
                 split,
+                granular,
                 conventional,
                 agent,
                 auto_confirm: yes,
