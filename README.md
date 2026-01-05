@@ -95,6 +95,27 @@ bahn auto --watch --defer --spread 4h --start "2025-01-05 09:00"
 
 **`--defer` mode** collects all commits during your session, then creates them with randomly spread timestamps when you press Ctrl+C. Perfect for making AI-assisted coding look natural.
 
+### Granular Commits (Ultra-Realistic)
+
+```bash
+# Split individual files into hunks (chunks) for realistic history
+bahn commit --granular
+
+# Combine with spread timestamps
+bahn commit -g --spread 4h --start "2025-01-05 09:00"
+
+# Request specific number of commits
+bahn commit -g --split 20 --spread 6h -y
+```
+
+**`--granular` mode** analyzes your changes at the hunk level (individual chunks within files) rather than whole files. This creates commits that look like natural, incremental development:
+
+- A single file can be split across multiple commits
+- Related hunks across files are grouped together
+- Earlier commits contain foundational code (imports, types)
+- Later commits build on earlier ones (implementations)
+- Each commit is self-contained and won't break the build
+
 ### Code Rewrite
 
 ```bash
