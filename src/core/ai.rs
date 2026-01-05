@@ -88,31 +88,48 @@ impl AiClient {
     }
 
     /// Generate multiple atomic commit suggestions
+    /// If `target_count` is provided, try to create approximately that many commits
     pub async fn suggest_atomic_commits(
         &self,
         diff: &str,
         files: &[&str],
+        target_count: Option<usize>,
     ) -> Result<Vec<AtomicCommitSuggestion>> {
-        let system_prompt = r#"You are an expert at analyzing code changes and suggesting atomic commits.
+        let target_instruction = if let Some(count) = target_count {
+            format!(
+                "\n\nIMPORTANT: Split the changes into EXACTLY {} commits. \
+                Distribute the files and changes evenly across {} commits. \
+                Each commit should represent a logical step in the development process.",
+                count, count
+            )
+        } else {
+            String::new()
+        };
+
+        let system_prompt = format!(
+            r#"You are an expert at analyzing code changes and suggesting atomic commits.
 
 Your task is to analyze a diff and suggest how to split it into atomic commits.
 Each atomic commit should:
 1. Do exactly one thing
 2. Be self-contained and not break the build
 3. Have a clear, conventional commit message
+4. Have a UNIQUE message - never repeat the same commit message{}
 
 Respond in JSON format:
-{
+{{
   "commits": [
-    {
+    {{
       "message": "feat(auth): add login validation",
       "files": ["src/auth.rs", "src/validation.rs"],
       "description": "Brief explanation of what this commit does"
-    }
+    }}
   ]
-}
+}}
 
-If the changes should be a single commit, return just one item in the array."#;
+If the changes should be a single commit, return just one item in the array."#,
+            target_instruction
+        );
 
         let mut user_content = String::new();
         user_content.push_str(&format!("Files changed: {}\n\n", files.join(", ")));
@@ -127,7 +144,7 @@ If the changes should be a single commit, return just one item in the array."#;
         }
         user_content.push_str("\n```");
 
-        let response = self.send_message(system_prompt, &user_content).await?;
+        let response = self.send_message(&system_prompt, &user_content).await?;
 
         // Parse JSON response - extract JSON if wrapped in text/markdown
         let json_str = extract_json(&response);

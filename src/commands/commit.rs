@@ -14,6 +14,8 @@ use crate::core::git;
 /// Options for the commit command
 pub struct CommitOptions {
     pub atomic: bool,
+    /// Target number of commits to split into
+    pub split: Option<usize>,
     #[allow(dead_code)] // Will be used when custom templates are implemented
     pub conventional: bool,
     pub agent: Option<String>,
@@ -292,7 +294,7 @@ async fn run_atomic_commits(
 
     // Get atomic commit suggestions
     let files: Vec<&str> = changes.all_files();
-    let suggestions = ai.suggest_atomic_commits(&changes.diff, &files).await?;
+    let suggestions = ai.suggest_atomic_commits(&changes.diff, &files, options.split).await?;
 
     pb.finish_and_clear();
 

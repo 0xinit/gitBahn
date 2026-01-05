@@ -28,6 +28,10 @@ enum Commands {
         #[arg(short, long)]
         atomic: bool,
 
+        /// Target number of commits to split into (implies --atomic)
+        #[arg(long)]
+        split: Option<usize>,
+
         /// Use conventional commit format
         #[arg(long)]
         conventional: bool,
@@ -157,9 +161,10 @@ async fn main() -> Result<()> {
     let config = Config::load(None)?;
 
     match cli.command {
-        Commands::Commit { atomic, conventional, agent, yes, spread, start } => {
+        Commands::Commit { atomic, split, conventional, agent, yes, spread, start } => {
             let options = commands::commit::CommitOptions {
-                atomic,
+                atomic: atomic || split.is_some(), // --split implies --atomic
+                split,
                 conventional,
                 agent,
                 auto_confirm: yes,
