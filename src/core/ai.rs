@@ -148,7 +148,7 @@ If the changes should be a single commit, return just one item in the array."#,
 
         // Parse JSON response - extract JSON if wrapped in text/markdown
         let json_str = extract_json(&response);
-        let parsed: AtomicCommitsResponse = serde_json::from_str(&json_str)
+        let parsed: AtomicCommitsResponse = serde_json::from_str(json_str)
             .with_context(|| format!("Failed to parse AI response as JSON: {}", &response[..200.min(response.len())]))?;
 
         Ok(parsed.commits)
