@@ -48,6 +48,15 @@ bahn commit --atomic --spread 4h
 # Atomic commits with custom start time
 bahn commit --atomic --spread 4h --start "2025-01-05 09:00"
 
+# Split into exactly N commits
+bahn commit --atomic --split 10
+
+# Granular mode - split files into hunks for ultra-realistic commits
+bahn commit --granular --spread 4h
+
+# Granular with exact commit count
+bahn commit -g --split 15 --spread 2h --start "2025-01-05 09:00"
+
 # Auto-confirm without prompting
 bahn commit -y
 ```
