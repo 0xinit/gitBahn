@@ -129,9 +129,10 @@ If the changes should be a single commit, return just one item in the array."#;
 
         let response = self.send_message(system_prompt, &user_content).await?;
 
-        // Parse JSON response
-        let parsed: AtomicCommitsResponse = serde_json::from_str(&response)
-            .context("Failed to parse AI response as JSON")?;
+        // Parse JSON response - extract JSON if wrapped in text/markdown
+        let json_str = extract_json(&response);
+        let parsed: AtomicCommitsResponse = serde_json::from_str(&json_str)
+            .with_context(|| format!("Failed to parse AI response as JSON: {}", &response[..200.min(response.len())]))?;
 
         Ok(parsed.commits)
     }
@@ -208,8 +209,9 @@ Only output the documentation, ready to be inserted into the code."#,
 
         let response = self.send_message(&system_prompt, &user_content).await?;
 
-        let review: CodeReview = serde_json::from_str(&response)
-            .context("Failed to parse review response as JSON")?;
+        let json_str = extract_json(&response);
+        let review: CodeReview = serde_json::from_str(json_str)
+            .with_context(|| format!("Failed to parse review response as JSON: {}", &response[..200.min(response.len())]))?;
 
         Ok(review)
     }
@@ -430,4 +432,47 @@ pub struct ReviewIssue {
     pub line: Option<u32>,
     pub message: String,
     pub suggestion: Option<String>,
+}
+
+/// Extract JSON from a response that might be wrapped in markdown or text
+fn extract_json(response: &str) -> &str {
+    let response = response.trim();
+
+    // If it starts with {, assume it's already JSON
+    if response.starts_with('{') {
+        return response;
+    }
+
+    // Try to find JSON in markdown code blocks
+    if let Some(start) = response.find("```json") {
+        let json_start = start + 7; // Skip ```json
+        if let Some(end) = response[json_start..].find("```") {
+            return response[json_start..json_start + end].trim();
+        }
+    }
+
+    // Try plain code blocks
+    if let Some(start) = response.find("```") {
+        let block_start = start + 3;
+        // Skip optional language identifier
+        let content_start = response[block_start..]
+            .find('\n')
+            .map(|i| block_start + i + 1)
+            .unwrap_or(block_start);
+        if let Some(end) = response[content_start..].find("```") {
+            return response[content_start..content_start + end].trim();
+        }
+    }
+
+    // Try to find { and } and extract
+    if let Some(start) = response.find('{') {
+        if let Some(end) = response.rfind('}') {
+            if end > start {
+                return &response[start..=end];
+            }
+        }
+    }
+
+    // Return as-is and let the parser fail with a better error
+    response
 }
