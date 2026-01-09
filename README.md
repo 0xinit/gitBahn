@@ -2,6 +2,48 @@
 
 Autonomous Git operations with AI-powered commits, merges, and code rewriting.
 
+## Why gitBahn?
+
+AI coding assistants can write entire projects in minutes. But when you commit that code, the git history tells a different story:
+
+```
+commit abc123  2025-01-10 14:32:01  feat: add complete trading bot
+  28 files changed, 5278 insertions(+)
+```
+
+**One massive commit. All files at once. Obviously AI-generated.**
+
+gitBahn transforms this into a realistic development history:
+
+```
+commit 9fd434c  Jan 03, 11:17  chore: initialize project with gitignore
+commit 57cb30b  Jan 03, 13:12  feat: add environment configuration
+commit 97096e8  Jan 03, 15:13  feat(utils): add shared constants
+commit 2be67ce  Jan 03, 16:08  feat(storage): add data models
+commit fd82b57  Jan 03, 17:56  feat(storage): implement Redis client
+...47 commits over 2 days...
+commit a504534  Jan 05, 02:23  docs: add comprehensive README
+```
+
+**Small focused commits. Spread over time. Natural development progression.**
+
+### What gitBahn Offers
+
+| Feature | Standard Git | gitBahn |
+|---------|--------------|---------|
+| Custom timestamps | Limited | Full control |
+| Spread commits over time | Manual | Automatic |
+| Split 1 change → N commits | Manual | AI-powered |
+| Split files by function | Not possible | Automatic |
+| Realistic development flow | Manual | `--realistic` mode |
+
+### Perfect For
+
+- Portfolio projects that showcase your work
+- Open source contributions with clean history
+- Teams that want organized, readable git logs
+- Anyone using AI assistants who wants natural-looking commits
+
 ## Features
 
 - **AI Commit**: Generate intelligent commit messages from diffs
@@ -115,6 +157,35 @@ bahn commit -g --split 20 --spread 6h -y
 - Earlier commits contain foundational code (imports, types)
 - Later commits build on earlier ones (implementations)
 - Each commit is self-contained and won't break the build
+
+### Realistic Mode (Maximum Authenticity)
+
+```bash
+# Simulate human development flow
+bahn commit --realistic
+
+# Target specific commit count spread over time
+bahn commit --realistic --split 47 --spread 48h --start "2025-01-03 11:17"
+
+# Short form with auto-confirm
+bahn commit -r --split 30 --spread 24h -y
+```
+
+**`--realistic` mode** is the most sophisticated option. It simulates how a human developer actually builds a project:
+
+1. **Language-aware parsing** - Understands Python, Rust, JavaScript/TypeScript, and Go
+2. **Logical chunking** - Splits files into imports, constants, classes, and individual methods
+3. **Dependency ordering** - Config files first, then utils, models, services, and finally entry points
+4. **Progressive building** - Large files grow across multiple commits (imports → class skeleton → methods)
+5. **Natural interleaving** - Work on module A, switch to B, come back to A
+
+**Commit Mode Comparison:**
+
+| Mode | Splits by | Best for |
+|------|-----------|----------|
+| `--atomic` | Whole files | Quick splitting |
+| `--granular` | Hunks (diff chunks) | Modified files |
+| `--realistic` | Logical code units | New projects, maximum authenticity |
 
 ### Code Rewrite
 
