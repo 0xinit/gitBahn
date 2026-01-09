@@ -8,7 +8,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use rand::Rng;
 
 use crate::config::Config;
-use crate::core::ai::{AiClient, HunkInfo};
+use crate::core::ai::{AiClient, ChunkInfo, HunkInfo};
 use crate::core::git;
 
 /// Options for the commit command
@@ -18,6 +18,8 @@ pub struct CommitOptions {
     pub split: Option<usize>,
     /// Split individual files into hunks for ultra-realistic commits
     pub granular: bool,
+    /// Realistic mode - simulate human development flow
+    pub realistic: bool,
     #[allow(dead_code)] // Will be used when custom templates are implemented
     pub conventional: bool,
     pub agent: Option<String>,
@@ -206,7 +208,9 @@ pub async fn run(options: CommitOptions, config: &Config) -> Result<()> {
     let personality = options.agent.as_deref()
         .or(config.commit.default_agent.as_deref());
 
-    if options.granular {
+    if options.realistic {
+        run_realistic_commits(&repo, &ai, &options).await
+    } else if options.granular {
         run_granular_commits(&repo, &changes, &ai, context.as_deref(), personality, &options).await
     } else if options.atomic {
         run_atomic_commits(&repo, &changes, &ai, context.as_deref(), personality, &options).await
@@ -693,6 +697,294 @@ async fn run_granular_commits(
     }
 
     println!("\n{} Created {} granular commits.",
+        "✓".green().bold(),
+        created.to_string().cyan()
+    );
+
+    Ok(())
+}
+
+async fn run_realistic_commits(
+    repo: &git2::Repository,
+    ai: &AiClient,
+    options: &CommitOptions,
+) -> Result<()> {
+    let repo_path = repo.workdir()
+        .context("Repository has no working directory")?;
+
+    // Show progress
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(ProgressStyle::default_spinner()
+        .template("{spinner:.green} {msg}")
+        .unwrap());
+    pb.set_message("Analyzing files for realistic commit flow...");
+
+    // Parse files into logical chunks
+    let chunked = git::parse_files_into_chunks(repo)?;
+
+    if chunked.chunks.is_empty() {
+        pb.finish_and_clear();
+        println!("{}", "No files to commit.".yellow());
+        return Ok(());
+    }
+
+    pb.set_message(format!("Found {} chunks across {} files, planning commits...",
+        chunked.chunks.len(),
+        chunked.file_order.len()
+    ));
+
+    // Convert to ChunkInfo for AI
+    let chunk_infos: Vec<ChunkInfo> = chunked.chunks.iter().map(|c| {
+        // Create preview
+        let preview: String = c.content.lines()
+            .filter(|l| !l.trim().is_empty() && !l.trim().starts_with('#') && !l.trim().starts_with("//"))
+            .take(2)
+            .map(|l| l.trim())
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(80)
+            .collect();
+
+        ChunkInfo {
+            id: c.id,
+            file_path: c.file_path.clone(),
+            start_line: c.start_line,
+            end_line: c.end_line,
+            line_count: c.line_count,
+            chunk_type: c.chunk_type.to_string(),
+            description: c.description.clone(),
+            content_preview: preview,
+            is_new_file: true, // For now, assume all are new
+        }
+    }).collect();
+
+    // Get AI to plan the commits
+    let commit_plans = ai.plan_realistic_commits(&chunk_infos, &chunked.file_order, options.split).await?;
+
+    pb.finish_and_clear();
+
+    if commit_plans.is_empty() {
+        println!("{}", "No commit plan generated.".yellow());
+        return Ok(());
+    }
+
+    // Generate timestamps
+    let start_time = if let Some(ref start_str) = options.start {
+        parse_start_time(start_str)?
+    } else {
+        Local::now()
+    };
+
+    let spread_duration = if let Some(ref spread_str) = options.spread {
+        parse_duration(spread_str)?
+    } else {
+        default_spread_duration()
+    };
+
+    let timestamps = generate_spread_timestamps(commit_plans.len(), start_time, spread_duration);
+
+    println!("{} realistic commits planned (from {} chunks in {} files):\n",
+        commit_plans.len().to_string().cyan().bold(),
+        chunked.chunks.len(),
+        chunked.file_order.len()
+    );
+
+    for (i, plan) in commit_plans.iter().enumerate() {
+        let ts_str = timestamps.get(i)
+            .map(|t| t.format("%b %d, %H:%M:%S").to_string())
+            .unwrap_or_default();
+
+        // Show files involved
+        let files: Vec<&str> = plan.chunk_ids.iter()
+            .filter_map(|id| chunked.chunks.iter().find(|c| c.id == *id))
+            .map(|c| c.file_path.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        println!("{}. {} → {}",
+            (i + 1).to_string().bold(),
+            plan.message.green(),
+            ts_str.dimmed()
+        );
+        println!("   Chunks: {} | Files: {}",
+            plan.chunk_ids.iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+                .dimmed(),
+            files.join(", ").dimmed()
+        );
+        println!("   {}", plan.description.dimmed());
+        println!();
+    }
+
+    // Ask for confirmation
+    let proceed = if options.auto_confirm {
+        true
+    } else {
+        let choices = vec!["Create all realistic commits", "Cancel"];
+        let selection = Select::new()
+            .with_prompt("What would you like to do?")
+            .items(&choices)
+            .default(0)
+            .interact()?;
+
+        selection == 0
+    };
+
+    if !proceed {
+        println!("{}", "Commit cancelled.".yellow());
+        return Ok(());
+    }
+
+    // First, save original file contents and reset staging
+    let mut original_contents: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for chunk in &chunked.chunks {
+        if !original_contents.contains_key(&chunk.file_path) {
+            let full_path = repo_path.join(&chunk.file_path);
+            if let Ok(content) = std::fs::read_to_string(&full_path) {
+                original_contents.insert(chunk.file_path.clone(), content);
+            }
+        }
+    }
+
+    // Reset staging and working directory for progressive building
+    git::reset_index(repo)?;
+
+    // Track which chunks have been committed
+    let mut committed_chunks: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    // Track cumulative content for each file
+    let mut file_contents: std::collections::HashMap<String, Vec<&git::FileChunk>> = std::collections::HashMap::new();
+
+    let total = commit_plans.len();
+    let mut created = 0;
+
+    println!("\n{}", "Creating realistic commits...".bold());
+
+    for (i, plan) in commit_plans.iter().enumerate() {
+        // Get chunks for this commit
+        let commit_chunks: Vec<&git::FileChunk> = plan.chunk_ids.iter()
+            .filter_map(|id| chunked.chunks.iter().find(|c| c.id == *id))
+            .filter(|c| !committed_chunks.contains(&c.id))
+            .collect();
+
+        if commit_chunks.is_empty() {
+            println!("  {} Skipping commit {}/{}: no valid chunks",
+                "→".dimmed(),
+                i + 1,
+                total
+            );
+            continue;
+        }
+
+        // Add chunks to cumulative file contents
+        for chunk in &commit_chunks {
+            file_contents.entry(chunk.file_path.clone())
+                .or_default()
+                .push(chunk);
+            committed_chunks.insert(chunk.id);
+        }
+
+        // Write cumulative content for each affected file
+        let affected_files: Vec<String> = commit_chunks.iter()
+            .map(|c| c.file_path.clone())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        for file_path in &affected_files {
+            if let Some(chunks) = file_contents.get(file_path) {
+                // Sort chunks by start_line and build cumulative content
+                let mut sorted_chunks: Vec<&&git::FileChunk> = chunks.iter().collect();
+                sorted_chunks.sort_by_key(|c| c.start_line);
+
+                let content: String = sorted_chunks.iter()
+                    .map(|c| c.content.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                // Write the file with cumulative content
+                git::write_file_content(repo_path, file_path, &content)?;
+                git::stage_file(repo_path, file_path)?;
+            }
+        }
+
+        // Verify something is staged
+        let repo_fresh = git::open_repo(None)?;
+        let staged = git::get_staged_changes(&repo_fresh)?;
+
+        if staged.is_empty() {
+            println!("  {} Skipping commit {}/{}: nothing staged",
+                "→".dimmed(),
+                i + 1,
+                total
+            );
+            continue;
+        }
+
+        // Create the commit
+        let commit_time = timestamps.get(i).copied();
+        let oid = git::create_commit_at(&repo_fresh, &plan.message, false, commit_time)?;
+        created += 1;
+
+        let ts_str = commit_time
+            .map(|t| t.format("%H:%M:%S").to_string())
+            .unwrap_or_else(|| "now".to_string());
+        println!("  {} [{}/{}] {} @ {} - {}",
+            "✓".green().bold(),
+            created,
+            total,
+            oid.to_string()[..7].cyan(),
+            ts_str.dimmed(),
+            plan.message.lines().next().unwrap_or("")
+        );
+    }
+
+    // Restore any files that weren't fully committed
+    for (file_path, original) in &original_contents {
+        let full_path = repo_path.join(file_path);
+        let current = std::fs::read_to_string(&full_path).unwrap_or_default();
+        if current != *original {
+            // File is not complete, restore original
+            std::fs::write(&full_path, original)?;
+        }
+    }
+
+    // Check for remaining uncommitted content
+    let repo_final = git::open_repo(None)?;
+    if git::has_uncommitted_changes(&repo_final)? {
+        println!("\n{} Some content wasn't included in commits.",
+            "Note:".yellow()
+        );
+
+        let confirm = Confirm::new()
+            .with_prompt("Commit remaining changes?")
+            .default(true)
+            .interact()?;
+
+        if confirm {
+            git::stage_all(&repo_final)?;
+            let remaining = git::get_staged_changes(&repo_final)?;
+
+            if !remaining.is_empty() {
+                let message = ai.generate_commit_message(&remaining.diff, None, None).await?;
+                let oid = git::create_commit(&repo_final, &message, false)?;
+                created += 1;
+
+                println!("  {} [{}/{}] {} - {}",
+                    "✓".green().bold(),
+                    created,
+                    total + 1,
+                    oid.to_string()[..7].cyan(),
+                    message.lines().next().unwrap_or("")
+                );
+            }
+        }
+    }
+
+    println!("\n{} Created {} realistic commits.",
         "✓".green().bold(),
         created.to_string().cyan()
     );

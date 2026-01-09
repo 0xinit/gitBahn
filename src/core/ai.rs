@@ -229,6 +229,108 @@ The hunk_ids are the IDs provided in the hunk list. Each hunk should appear in e
         Ok(parsed.commits)
     }
 
+    /// Plan realistic commits that simulate human development flow
+    /// This creates a narrative of progressive development, not just mechanical splitting
+    pub async fn plan_realistic_commits(
+        &self,
+        chunks: &[ChunkInfo],
+        file_order: &[String],
+        target_count: Option<usize>,
+    ) -> Result<Vec<RealisticCommitPlan>> {
+        let target_instruction = if let Some(count) = target_count {
+            format!(
+                "\n\nIMPORTANT: Create approximately {} commits. \
+                If there aren't enough logical units, you may create fewer, but try to get close to {}.",
+                count, count
+            )
+        } else {
+            String::new()
+        };
+
+        let system_prompt = format!(
+            r#"You are simulating how a human developer builds a project from scratch.
+
+Your task is to create a realistic commit history that tells the story of development.
+
+DEVELOPMENT FLOW PRINCIPLES:
+1. START with project setup: .gitignore, requirements.txt, config files
+2. BUILD foundation first: shared utilities, constants, base models
+3. WORK on features incrementally: start a file, add imports, then classes, then methods
+4. INTERLEAVE work naturally: work on module A, switch to B, come back to A
+5. LARGE FILES get multiple commits: imports first, then class skeleton, then each method
+6. DEPENDENCIES come before dependents: models before services that use them
+7. MAIN entry points come late: main.py/app.py after the modules they import
+8. DOCKER/README come last: deployment and docs after implementation
+
+CHUNK TYPES:
+- "imports" = import statements (commit early, foundation)
+- "constants" = config values, constants (commit with imports or right after)
+- "class" = class/struct definitions (commit structure before methods)
+- "function" = individual functions/methods (can be separate commits for large files)
+- "full" = small complete files (commit as single unit)
+
+REALISTIC PATTERNS:
+- A developer might add imports to file A, then create file B, then add a class to file A
+- Methods in the same class might be committed separately if complex
+- Related files (like client.py and models.py) might be worked on in alternating commits
+- Fix-up commits are natural: "fix import in X" after realizing something was missing{}
+
+Respond in JSON format:
+{{
+  "commits": [
+    {{
+      "message": "chore: initialize project with gitignore and requirements",
+      "chunk_ids": [0, 5],
+      "description": "Set up project foundation"
+    }},
+    {{
+      "message": "feat(config): add configuration module",
+      "chunk_ids": [2, 3],
+      "description": "Add config loading and validation"
+    }}
+  ]
+}}
+
+Rules:
+- Each chunk_id should appear in exactly one commit
+- Commits should be in logical development order
+- Messages should follow conventional commits format
+- Each message must be UNIQUE"#,
+            target_instruction
+        );
+
+        // Build a representation of chunks and suggested file order
+        let mut user_content = String::new();
+        user_content.push_str("SUGGESTED FILE ORDER (based on dependencies):\n");
+        for (i, file) in file_order.iter().enumerate() {
+            user_content.push_str(&format!("  {}. {}\n", i + 1, file));
+        }
+        user_content.push_str("\nCHUNKS TO ORGANIZE:\n\n");
+
+        for chunk in chunks {
+            user_content.push_str(&format!(
+                "Chunk {} [{}] - {}:\n  File: {}\n  Lines: {}-{} ({} lines)\n  Description: {}\n  Preview: {}\n\n",
+                chunk.id,
+                chunk.chunk_type,
+                if chunk.is_new_file { "NEW FILE" } else { "MODIFIED" },
+                chunk.file_path,
+                chunk.start_line,
+                chunk.end_line,
+                chunk.line_count,
+                chunk.description,
+                chunk.content_preview
+            ));
+        }
+
+        let response = self.send_message(&system_prompt, &user_content).await?;
+
+        let json_str = extract_json(&response);
+        let parsed: RealisticCommitsResponse = serde_json::from_str(json_str)
+            .with_context(|| format!("Failed to parse realistic commits response: {}", &response[..300.min(response.len())]))?;
+
+        Ok(parsed.commits)
+    }
+
     /// Generate documentation for code
     pub async fn generate_docs(
         &self,
@@ -531,6 +633,33 @@ pub struct GranularCommitSuggestion {
 #[derive(Debug, Deserialize)]
 struct GranularCommitsResponse {
     commits: Vec<GranularCommitSuggestion>,
+}
+
+/// Chunk info for realistic commit planning
+#[derive(Debug)]
+pub struct ChunkInfo {
+    pub id: usize,
+    pub file_path: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub line_count: usize,
+    pub chunk_type: String,
+    pub description: String,
+    pub content_preview: String,
+    pub is_new_file: bool,
+}
+
+/// A planned commit in realistic mode
+#[derive(Debug, Deserialize)]
+pub struct RealisticCommitPlan {
+    pub message: String,
+    pub chunk_ids: Vec<usize>,
+    pub description: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RealisticCommitsResponse {
+    commits: Vec<RealisticCommitPlan>,
 }
 
 /// Code review result

@@ -250,6 +250,938 @@ fn build_patch_for_hunks(file_path: &str, hunks: &[&DiffHunk]) -> String {
     patch
 }
 
+// ============================================================================
+// Realistic Mode: File Chunking for Progressive Commits
+// ============================================================================
+
+/// Type of logical chunk within a file
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChunkType {
+    /// Import statements
+    Imports,
+    /// Constants, configs, module-level variables
+    Constants,
+    /// Class/struct definition (just the signature and __init__/new)
+    ClassDefinition,
+    /// Individual method or function
+    Function,
+    /// Full file (for small files)
+    FullFile,
+    /// Misc code block
+    Other,
+}
+
+impl std::fmt::Display for ChunkType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ChunkType::Imports => write!(f, "imports"),
+            ChunkType::Constants => write!(f, "constants"),
+            ChunkType::ClassDefinition => write!(f, "class"),
+            ChunkType::Function => write!(f, "function"),
+            ChunkType::FullFile => write!(f, "full"),
+            ChunkType::Other => write!(f, "other"),
+        }
+    }
+}
+
+/// A logical chunk of a file (for realistic progressive commits)
+#[derive(Debug, Clone)]
+pub struct FileChunk {
+    /// Unique ID for this chunk
+    pub id: usize,
+    /// File path
+    pub file_path: String,
+    /// Start line (1-indexed)
+    pub start_line: usize,
+    /// End line (1-indexed, inclusive)
+    pub end_line: usize,
+    /// The actual content of this chunk
+    pub content: String,
+    /// Type of chunk
+    pub chunk_type: ChunkType,
+    /// Human-readable description
+    pub description: String,
+    /// Number of lines
+    pub line_count: usize,
+    /// Dependencies (other files this chunk imports/uses)
+    pub dependencies: Vec<String>,
+}
+
+/// Result of parsing all staged files into chunks
+#[derive(Debug)]
+pub struct ChunkedFiles {
+    pub chunks: Vec<FileChunk>,
+    pub file_order: Vec<String>,  // Suggested order based on dependencies
+}
+
+/// Parse all staged new files into logical chunks for realistic commits
+pub fn parse_files_into_chunks(repo: &Repository) -> Result<ChunkedFiles> {
+    let changes = get_staged_changes(repo)?;
+    let workdir = repo.workdir().context("No working directory")?;
+
+    let mut all_chunks = Vec::new();
+    let mut chunk_id = 0;
+
+    // Process added files (new files that can be chunked)
+    for file_path in &changes.added {
+        let full_path = workdir.join(file_path);
+        let content = std::fs::read_to_string(&full_path)
+            .unwrap_or_default();
+
+        if content.is_empty() {
+            continue;
+        }
+
+        let file_chunks = parse_single_file_into_chunks(
+            file_path,
+            &content,
+            &mut chunk_id,
+        );
+        all_chunks.extend(file_chunks);
+    }
+
+    // Process modified files using their diff hunks
+    for file_path in &changes.modified {
+        let full_path = workdir.join(file_path);
+        let content = std::fs::read_to_string(&full_path)
+            .unwrap_or_default();
+
+        if content.is_empty() {
+            continue;
+        }
+
+        // For modified files, treat as single chunk for now
+        // (could be enhanced to split by hunks)
+        all_chunks.push(FileChunk {
+            id: chunk_id,
+            file_path: file_path.clone(),
+            start_line: 1,
+            end_line: content.lines().count(),
+            content: content.clone(),
+            chunk_type: ChunkType::FullFile,
+            description: format!("Modified: {}", file_path),
+            line_count: content.lines().count(),
+            dependencies: extract_dependencies(&content, file_path),
+        });
+        chunk_id += 1;
+    }
+
+    // Determine file order based on dependencies
+    let file_order = determine_file_order(&all_chunks);
+
+    Ok(ChunkedFiles {
+        chunks: all_chunks,
+        file_order,
+    })
+}
+
+/// Parse a single file into logical chunks based on its structure
+fn parse_single_file_into_chunks(
+    file_path: &str,
+    content: &str,
+    chunk_id: &mut usize,
+) -> Vec<FileChunk> {
+    let lines: Vec<&str> = content.lines().collect();
+    let total_lines = lines.len();
+
+    // For small files (< 50 lines), keep as single chunk
+    if total_lines < 50 {
+        let id = *chunk_id;
+        *chunk_id += 1;
+        return vec![FileChunk {
+            id,
+            file_path: file_path.to_string(),
+            start_line: 1,
+            end_line: total_lines,
+            content: content.to_string(),
+            chunk_type: ChunkType::FullFile,
+            description: format!("Add {}", file_path.split('/').last().unwrap_or(file_path)),
+            line_count: total_lines,
+            dependencies: extract_dependencies(content, file_path),
+        }];
+    }
+
+    // Detect language and parse accordingly
+    let ext = file_path.split('.').last().unwrap_or("");
+
+    match ext {
+        "py" => parse_python_file(file_path, &lines, content, chunk_id),
+        "rs" => parse_rust_file(file_path, &lines, content, chunk_id),
+        "js" | "ts" | "jsx" | "tsx" => parse_js_file(file_path, &lines, content, chunk_id),
+        "go" => parse_go_file(file_path, &lines, content, chunk_id),
+        _ => {
+            // Generic: split into ~50 line chunks
+            parse_generic_file(file_path, &lines, content, chunk_id)
+        }
+    }
+}
+
+/// Parse Python file into logical chunks
+fn parse_python_file(
+    file_path: &str,
+    lines: &[&str],
+    full_content: &str,
+    chunk_id: &mut usize,
+) -> Vec<FileChunk> {
+    let mut chunks = Vec::new();
+    let mut current_section_start = 0;
+    let mut current_section_type = ChunkType::Imports;
+    let mut in_class = false;
+    let mut class_indent = 0;
+    let mut current_class_name = String::new();
+
+    let file_name = file_path.split('/').last().unwrap_or(file_path);
+
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let indent = line.len() - line.trim_start().len();
+
+        // Detect section boundaries
+        let is_import = trimmed.starts_with("import ") || trimmed.starts_with("from ");
+        let is_class = trimmed.starts_with("class ");
+        let is_function = trimmed.starts_with("def ") || trimmed.starts_with("async def ");
+        let is_constant = !trimmed.is_empty()
+            && !trimmed.starts_with('#')
+            && !is_import
+            && !is_class
+            && !is_function
+            && indent == 0
+            && (trimmed.contains('=') || trimmed.chars().next().map(|c| c.is_uppercase()).unwrap_or(false));
+
+        // Handle class definitions
+        if is_class {
+            // Save previous section
+            if i > current_section_start {
+                chunks.push(create_chunk(
+                    file_path,
+                    lines,
+                    current_section_start,
+                    i - 1,
+                    current_section_type.clone(),
+                    chunk_id,
+                    &current_class_name,
+                    file_name,
+                ));
+            }
+
+            in_class = true;
+            class_indent = indent;
+            current_class_name = trimmed
+                .trim_start_matches("class ")
+                .split(['(', ':'])
+                .next()
+                .unwrap_or("Class")
+                .to_string();
+            current_section_start = i;
+            current_section_type = ChunkType::ClassDefinition;
+            continue;
+        }
+
+        // Handle top-level functions
+        if is_function && indent == 0 {
+            if i > current_section_start {
+                chunks.push(create_chunk(
+                    file_path,
+                    lines,
+                    current_section_start,
+                    i - 1,
+                    current_section_type.clone(),
+                    chunk_id,
+                    &current_class_name,
+                    file_name,
+                ));
+            }
+            in_class = false;
+            current_class_name.clear();
+            current_section_start = i;
+            current_section_type = ChunkType::Function;
+            continue;
+        }
+
+        // Handle methods inside class
+        if in_class && is_function && indent > class_indent {
+            // Only split if we have substantial content
+            if i > current_section_start + 5 {
+                chunks.push(create_chunk(
+                    file_path,
+                    lines,
+                    current_section_start,
+                    i - 1,
+                    current_section_type.clone(),
+                    chunk_id,
+                    &current_class_name,
+                    file_name,
+                ));
+                current_section_start = i;
+                current_section_type = ChunkType::Function;
+            }
+            continue;
+        }
+
+        // Detect transition from imports to constants
+        if current_section_type == ChunkType::Imports && !is_import && !trimmed.is_empty() && !trimmed.starts_with('#') {
+            if i > current_section_start {
+                chunks.push(create_chunk(
+                    file_path,
+                    lines,
+                    current_section_start,
+                    i - 1,
+                    ChunkType::Imports,
+                    chunk_id,
+                    "",
+                    file_name,
+                ));
+            }
+            current_section_start = i;
+            current_section_type = if is_constant { ChunkType::Constants } else { ChunkType::Other };
+        }
+    }
+
+    // Don't forget the last section
+    if current_section_start < lines.len() {
+        chunks.push(create_chunk(
+            file_path,
+            lines,
+            current_section_start,
+            lines.len() - 1,
+            current_section_type,
+            chunk_id,
+            &current_class_name,
+            file_name,
+        ));
+    }
+
+    // If we only got 1 chunk, it's essentially the same as full file
+    if chunks.len() == 1 {
+        chunks[0].chunk_type = ChunkType::FullFile;
+    }
+
+    // Add dependencies to first chunk
+    if !chunks.is_empty() {
+        chunks[0].dependencies = extract_dependencies(full_content, file_path);
+    }
+
+    chunks
+}
+
+/// Parse Rust file into logical chunks
+fn parse_rust_file(
+    file_path: &str,
+    lines: &[&str],
+    full_content: &str,
+    chunk_id: &mut usize,
+) -> Vec<FileChunk> {
+    let mut chunks = Vec::new();
+    let mut current_section_start = 0;
+    let mut current_section_type = ChunkType::Imports;
+    let mut brace_depth = 0;
+
+    let file_name = file_path.split('/').last().unwrap_or(file_path);
+
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+
+        // Count braces for tracking blocks
+        brace_depth += trimmed.matches('{').count() as i32;
+        brace_depth -= trimmed.matches('}').count() as i32;
+
+        let is_use = trimmed.starts_with("use ");
+        let is_struct = trimmed.starts_with("pub struct ") || trimmed.starts_with("struct ");
+        let is_impl = trimmed.starts_with("impl ");
+        let is_fn = trimmed.starts_with("pub fn ") || trimmed.starts_with("fn ")
+            || trimmed.starts_with("pub async fn ") || trimmed.starts_with("async fn ");
+        let is_const = trimmed.starts_with("const ") || trimmed.starts_with("pub const ")
+            || trimmed.starts_with("static ") || trimmed.starts_with("pub static ");
+
+        // Detect major section boundaries (only at top level)
+        if brace_depth == 0 || (brace_depth == 1 && trimmed.contains('{')) {
+            if is_struct || is_impl || is_fn {
+                if i > current_section_start + 2 {
+                    chunks.push(create_chunk(
+                        file_path,
+                        lines,
+                        current_section_start,
+                        i - 1,
+                        current_section_type.clone(),
+                        chunk_id,
+                        "",
+                        file_name,
+                    ));
+                    current_section_start = i;
+                }
+
+                current_section_type = if is_struct {
+                    ChunkType::ClassDefinition
+                } else if is_fn {
+                    ChunkType::Function
+                } else {
+                    ChunkType::Other
+                };
+            }
+        }
+
+        // Transition from use statements
+        if current_section_type == ChunkType::Imports && !is_use && !trimmed.is_empty()
+            && !trimmed.starts_with("//") && !trimmed.starts_with("#[") {
+            if i > current_section_start {
+                chunks.push(create_chunk(
+                    file_path,
+                    lines,
+                    current_section_start,
+                    i - 1,
+                    ChunkType::Imports,
+                    chunk_id,
+                    "",
+                    file_name,
+                ));
+            }
+            current_section_start = i;
+            current_section_type = if is_const { ChunkType::Constants } else { ChunkType::Other };
+        }
+    }
+
+    // Last section
+    if current_section_start < lines.len() {
+        chunks.push(create_chunk(
+            file_path,
+            lines,
+            current_section_start,
+            lines.len() - 1,
+            current_section_type,
+            chunk_id,
+            "",
+            file_name,
+        ));
+    }
+
+    if chunks.len() == 1 {
+        chunks[0].chunk_type = ChunkType::FullFile;
+    }
+
+    if !chunks.is_empty() {
+        chunks[0].dependencies = extract_dependencies(full_content, file_path);
+    }
+
+    chunks
+}
+
+/// Parse JavaScript/TypeScript file into logical chunks
+fn parse_js_file(
+    file_path: &str,
+    lines: &[&str],
+    full_content: &str,
+    chunk_id: &mut usize,
+) -> Vec<FileChunk> {
+    let mut chunks = Vec::new();
+    let mut current_section_start = 0;
+    let mut current_section_type = ChunkType::Imports;
+    let mut brace_depth = 0;
+
+    let file_name = file_path.split('/').last().unwrap_or(file_path);
+
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+
+        brace_depth += trimmed.matches('{').count() as i32;
+        brace_depth -= trimmed.matches('}').count() as i32;
+
+        let is_import = trimmed.starts_with("import ");
+        let is_class = trimmed.starts_with("class ") || trimmed.starts_with("export class ");
+        let is_function = trimmed.starts_with("function ") || trimmed.starts_with("export function ")
+            || trimmed.starts_with("const ") && trimmed.contains("=>")
+            || trimmed.starts_with("export const ") && trimmed.contains("=>");
+        let is_export = trimmed.starts_with("export ");
+
+        if brace_depth == 0 && (is_class || is_function) {
+            if i > current_section_start + 2 {
+                chunks.push(create_chunk(
+                    file_path,
+                    lines,
+                    current_section_start,
+                    i - 1,
+                    current_section_type.clone(),
+                    chunk_id,
+                    "",
+                    file_name,
+                ));
+                current_section_start = i;
+            }
+            current_section_type = if is_class { ChunkType::ClassDefinition } else { ChunkType::Function };
+        }
+
+        if current_section_type == ChunkType::Imports && !is_import && !trimmed.is_empty()
+            && !trimmed.starts_with("//") && !trimmed.starts_with("/*") {
+            if i > current_section_start {
+                chunks.push(create_chunk(
+                    file_path,
+                    lines,
+                    current_section_start,
+                    i - 1,
+                    ChunkType::Imports,
+                    chunk_id,
+                    "",
+                    file_name,
+                ));
+            }
+            current_section_start = i;
+            current_section_type = ChunkType::Other;
+        }
+    }
+
+    if current_section_start < lines.len() {
+        chunks.push(create_chunk(
+            file_path,
+            lines,
+            current_section_start,
+            lines.len() - 1,
+            current_section_type,
+            chunk_id,
+            "",
+            file_name,
+        ));
+    }
+
+    if chunks.len() == 1 {
+        chunks[0].chunk_type = ChunkType::FullFile;
+    }
+
+    if !chunks.is_empty() {
+        chunks[0].dependencies = extract_dependencies(full_content, file_path);
+    }
+
+    chunks
+}
+
+/// Parse Go file into logical chunks
+fn parse_go_file(
+    file_path: &str,
+    lines: &[&str],
+    full_content: &str,
+    chunk_id: &mut usize,
+) -> Vec<FileChunk> {
+    let mut chunks = Vec::new();
+    let mut current_section_start = 0;
+    let mut current_section_type = ChunkType::Imports;
+    let mut brace_depth = 0;
+
+    let file_name = file_path.split('/').last().unwrap_or(file_path);
+
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+
+        brace_depth += trimmed.matches('{').count() as i32;
+        brace_depth -= trimmed.matches('}').count() as i32;
+
+        let is_import = trimmed.starts_with("import ");
+        let is_package = trimmed.starts_with("package ");
+        let is_type = trimmed.starts_with("type ");
+        let is_func = trimmed.starts_with("func ");
+        let is_const = trimmed.starts_with("const ") || trimmed.starts_with("var ");
+
+        if brace_depth == 0 && (is_type || is_func) {
+            if i > current_section_start + 2 {
+                chunks.push(create_chunk(
+                    file_path,
+                    lines,
+                    current_section_start,
+                    i - 1,
+                    current_section_type.clone(),
+                    chunk_id,
+                    "",
+                    file_name,
+                ));
+                current_section_start = i;
+            }
+            current_section_type = if is_type { ChunkType::ClassDefinition } else { ChunkType::Function };
+        }
+
+        if current_section_type == ChunkType::Imports && !is_import && !is_package && !trimmed.is_empty()
+            && !trimmed.starts_with("//") && trimmed != ")" {
+            if i > current_section_start {
+                chunks.push(create_chunk(
+                    file_path,
+                    lines,
+                    current_section_start,
+                    i - 1,
+                    ChunkType::Imports,
+                    chunk_id,
+                    "",
+                    file_name,
+                ));
+            }
+            current_section_start = i;
+            current_section_type = if is_const { ChunkType::Constants } else { ChunkType::Other };
+        }
+    }
+
+    if current_section_start < lines.len() {
+        chunks.push(create_chunk(
+            file_path,
+            lines,
+            current_section_start,
+            lines.len() - 1,
+            current_section_type,
+            chunk_id,
+            "",
+            file_name,
+        ));
+    }
+
+    if chunks.len() == 1 {
+        chunks[0].chunk_type = ChunkType::FullFile;
+    }
+
+    if !chunks.is_empty() {
+        chunks[0].dependencies = extract_dependencies(full_content, file_path);
+    }
+
+    chunks
+}
+
+/// Parse generic file by splitting into ~50 line chunks
+fn parse_generic_file(
+    file_path: &str,
+    lines: &[&str],
+    _full_content: &str,
+    chunk_id: &mut usize,
+) -> Vec<FileChunk> {
+    let mut chunks = Vec::new();
+    let chunk_size = 50;
+    let file_name = file_path.split('/').last().unwrap_or(file_path);
+
+    let mut start = 0;
+    while start < lines.len() {
+        let end = (start + chunk_size).min(lines.len()) - 1;
+        let id = *chunk_id;
+        *chunk_id += 1;
+
+        let content: String = lines[start..=end].join("\n");
+
+        chunks.push(FileChunk {
+            id,
+            file_path: file_path.to_string(),
+            start_line: start + 1,
+            end_line: end + 1,
+            content,
+            chunk_type: if start == 0 { ChunkType::FullFile } else { ChunkType::Other },
+            description: format!(
+                "{} lines {}-{}",
+                file_name,
+                start + 1,
+                end + 1
+            ),
+            line_count: end - start + 1,
+            dependencies: vec![],
+        });
+
+        start = end + 1;
+    }
+
+    chunks
+}
+
+/// Create a chunk from line range
+fn create_chunk(
+    file_path: &str,
+    lines: &[&str],
+    start: usize,
+    end: usize,
+    chunk_type: ChunkType,
+    chunk_id: &mut usize,
+    class_name: &str,
+    file_name: &str,
+) -> FileChunk {
+    let id = *chunk_id;
+    *chunk_id += 1;
+
+    let content: String = lines[start..=end.min(lines.len() - 1)].join("\n");
+    let line_count = end - start + 1;
+
+    // Generate description based on chunk type
+    let description = match chunk_type {
+        ChunkType::Imports => format!("Add imports for {}", file_name),
+        ChunkType::Constants => format!("Add constants for {}", file_name),
+        ChunkType::ClassDefinition => {
+            if class_name.is_empty() {
+                format!("Add class definition in {}", file_name)
+            } else {
+                format!("Add {} class structure", class_name)
+            }
+        }
+        ChunkType::Function => {
+            // Try to extract function name
+            let func_line = lines.get(start).unwrap_or(&"");
+            let func_name = extract_function_name(func_line);
+            if func_name.is_empty() {
+                format!("Add function in {}", file_name)
+            } else if !class_name.is_empty() {
+                format!("Add {}.{} method", class_name, func_name)
+            } else {
+                format!("Add {} function", func_name)
+            }
+        }
+        ChunkType::FullFile => format!("Add {}", file_name),
+        ChunkType::Other => format!("Add code in {}", file_name),
+    };
+
+    FileChunk {
+        id,
+        file_path: file_path.to_string(),
+        start_line: start + 1,
+        end_line: end + 1,
+        content,
+        chunk_type,
+        description,
+        line_count,
+        dependencies: vec![],
+    }
+}
+
+/// Extract function name from a function definition line
+fn extract_function_name(line: &str) -> String {
+    let trimmed = line.trim();
+
+    // Python: def func_name( or async def func_name(
+    if trimmed.starts_with("def ") || trimmed.starts_with("async def ") {
+        let start = if trimmed.starts_with("async") { "async def ".len() } else { "def ".len() };
+        return trimmed[start..]
+            .split('(')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+    }
+
+    // Rust: fn func_name( or pub fn func_name(
+    if trimmed.contains("fn ") {
+        return trimmed
+            .split("fn ")
+            .nth(1)
+            .unwrap_or("")
+            .split(['(', '<'])
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+    }
+
+    // JS: function func_name( or const func_name =
+    if trimmed.starts_with("function ") {
+        return trimmed["function ".len()..]
+            .split('(')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+    }
+
+    // Go: func funcName( or func (r *Receiver) funcName(
+    if trimmed.starts_with("func ") {
+        let after_func = &trimmed["func ".len()..];
+        if after_func.starts_with('(') {
+            // Method with receiver
+            return after_func
+                .split(')')
+                .nth(1)
+                .unwrap_or("")
+                .trim()
+                .split('(')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+        } else {
+            return after_func
+                .split('(')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+        }
+    }
+
+    String::new()
+}
+
+/// Extract dependencies (imports) from file content
+fn extract_dependencies(content: &str, file_path: &str) -> Vec<String> {
+    let mut deps = Vec::new();
+    let ext = file_path.split('.').last().unwrap_or("");
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        match ext {
+            "py" => {
+                if trimmed.starts_with("from ") {
+                    // from module import ...
+                    if let Some(module) = trimmed.strip_prefix("from ") {
+                        let module = module.split_whitespace().next().unwrap_or("");
+                        if !module.is_empty() && !module.starts_with('.') {
+                            deps.push(module.to_string());
+                        }
+                    }
+                } else if trimmed.starts_with("import ") {
+                    if let Some(module) = trimmed.strip_prefix("import ") {
+                        let module = module.split([',', ' ']).next().unwrap_or("");
+                        if !module.is_empty() {
+                            deps.push(module.to_string());
+                        }
+                    }
+                }
+            }
+            "rs" => {
+                if trimmed.starts_with("use ") {
+                    if let Some(path) = trimmed.strip_prefix("use ") {
+                        let path = path.trim_end_matches(';').split("::").next().unwrap_or("");
+                        if !path.is_empty() && path != "crate" && path != "self" && path != "super" {
+                            deps.push(path.to_string());
+                        }
+                    }
+                }
+            }
+            "js" | "ts" | "jsx" | "tsx" => {
+                if trimmed.starts_with("import ") {
+                    // import ... from "module"
+                    if let Some(from_part) = trimmed.split(" from ").nth(1) {
+                        let module = from_part.trim_matches(|c| c == '"' || c == '\'' || c == ';');
+                        if !module.is_empty() {
+                            deps.push(module.to_string());
+                        }
+                    }
+                }
+            }
+            "go" => {
+                if trimmed.starts_with("import ") || trimmed.starts_with('"') {
+                    let module = trimmed.trim_matches(|c| c == '"' || c == ' ' || c == '\t');
+                    if !module.is_empty() && module != "import" && module != "(" {
+                        deps.push(module.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    deps
+}
+
+/// Determine optimal file order based on dependencies and file types
+fn determine_file_order(chunks: &[FileChunk]) -> Vec<String> {
+    let mut files: Vec<String> = chunks.iter()
+        .map(|c| c.file_path.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    // Sort by priority:
+    // 1. Config files (.gitignore, requirements.txt, package.json, Cargo.toml)
+    // 2. Environment files (.env.example)
+    // 3. Init files (__init__.py, mod.rs)
+    // 4. Models/types (models.py, types.rs)
+    // 5. Utils/helpers (utils.py, helpers.rs)
+    // 6. Services/core logic
+    // 7. Routes/handlers
+    // 8. Main entry points
+    // 9. Tests
+    // 10. Docker/CI files
+    // 11. Documentation (README)
+
+    files.sort_by(|a, b| {
+        let priority_a = file_priority(a);
+        let priority_b = file_priority(b);
+        priority_a.cmp(&priority_b)
+    });
+
+    files
+}
+
+/// Get priority for file ordering (lower = earlier)
+fn file_priority(path: &str) -> u32 {
+    let name = path.split('/').last().unwrap_or(path).to_lowercase();
+    let dir = path.split('/').rev().nth(1).unwrap_or("").to_lowercase();
+
+    // Config and setup files first
+    if name == ".gitignore" || name == ".env.example" { return 1; }
+    if name == "requirements.txt" || name == "package.json" || name == "cargo.toml" || name == "go.mod" { return 2; }
+    if name == "pyproject.toml" || name == "setup.py" || name == "tsconfig.json" { return 3; }
+
+    // Config modules
+    if name.contains("config") { return 10; }
+    if name.contains("settings") { return 11; }
+    if name.contains("constants") { return 12; }
+
+    // Init files
+    if name == "__init__.py" || name == "mod.rs" || name == "index.ts" || name == "index.js" { return 15; }
+
+    // Shared/common utilities
+    if dir == "shared" || dir == "common" || dir == "utils" { return 20; }
+    if name.contains("utils") || name.contains("helpers") { return 21; }
+
+    // Models and types
+    if name.contains("models") || name.contains("types") || name.contains("schemas") { return 30; }
+
+    // Core services
+    if dir == "services" || name.contains("service") { return 40; }
+    if dir == "core" { return 41; }
+
+    // Clients and integrations
+    if name.contains("client") { return 50; }
+    if dir == "indexers" || dir == "integrations" { return 51; }
+
+    // Handlers and routes
+    if dir == "routers" || dir == "routes" || dir == "handlers" { return 60; }
+    if name.contains("router") || name.contains("handler") { return 61; }
+
+    // Main entry points
+    if name == "main.py" || name == "main.rs" || name == "main.go" || name == "app.py" { return 70; }
+    if name == "index.ts" || name == "index.js" || name == "app.ts" { return 71; }
+
+    // CLI
+    if dir == "cli" || name.contains("cli") { return 75; }
+
+    // Tests
+    if name.starts_with("test_") || name.ends_with("_test.py") || name.ends_with("_test.go") { return 80; }
+    if dir == "tests" || dir == "test" { return 81; }
+
+    // Docker and deployment
+    if name == "dockerfile" || name == "docker-compose.yml" || name == "docker-compose.yaml" { return 90; }
+    if dir == ".github" || name.contains("ci") { return 91; }
+
+    // Documentation last
+    if name == "readme.md" || name == "readme.rst" { return 100; }
+    if name.ends_with(".md") { return 101; }
+
+    // Default
+    50
+}
+
+/// Write partial file content for progressive commits
+pub fn write_file_content(repo_path: &Path, file_path: &str, content: &str) -> Result<()> {
+    let full_path = repo_path.join(file_path);
+
+    // Ensure parent directory exists
+    if let Some(parent) = full_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory for {}", file_path))?;
+    }
+
+    std::fs::write(&full_path, content)
+        .with_context(|| format!("Failed to write {}", file_path))?;
+
+    Ok(())
+}
+
+/// Stage a specific file
+pub fn stage_file(repo_path: &Path, file_path: &str) -> Result<()> {
+    Command::new("git")
+        .args(["add", file_path])
+        .current_dir(repo_path)
+        .output()
+        .with_context(|| format!("Failed to stage {}", file_path))?;
+    Ok(())
+}
+
 /// Information about staged changes
 #[derive(Debug, Clone)]
 pub struct StagedChanges {

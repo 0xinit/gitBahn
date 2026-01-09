@@ -36,6 +36,10 @@ enum Commands {
         #[arg(short, long)]
         granular: bool,
 
+        /// Realistic mode - simulate human development flow
+        #[arg(short, long)]
+        realistic: bool,
+
         /// Use conventional commit format
         #[arg(long)]
         conventional: bool,
@@ -165,11 +169,12 @@ async fn main() -> Result<()> {
     let config = Config::load(None)?;
 
     match cli.command {
-        Commands::Commit { atomic, split, granular, conventional, agent, yes, spread, start } => {
+        Commands::Commit { atomic, split, granular, realistic, conventional, agent, yes, spread, start } => {
             let options = commands::commit::CommitOptions {
-                atomic: atomic || split.is_some() || granular, // --split or --granular implies --atomic
+                atomic: atomic || split.is_some() || granular || realistic,
                 split,
                 granular,
+                realistic,
                 conventional,
                 agent,
                 auto_confirm: yes,
