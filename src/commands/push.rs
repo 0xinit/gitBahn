@@ -309,3 +309,39 @@ fn get_commits_since_base(repo: &git2::Repository, base: &str) -> Result<Vec<Str
 }
 
 /// Check if branch is protected (main, master, etc.)
+fn is_protected_branch(branch: &str) -> bool {
+    matches!(branch, "main" | "master" | "develop" | "production" | "staging")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_github_url_ssh() {
+        let (owner, repo) = parse_github_url("git@github.com:user/project.git").unwrap();
+        assert_eq!(owner, "user");
+        assert_eq!(repo, "project");
+    }
+
+    #[test]
+    fn test_parse_github_url_https() {
+        let (owner, repo) = parse_github_url("https://github.com/user/project.git").unwrap();
+        assert_eq!(owner, "user");
+        assert_eq!(repo, "project");
+    }
+
+    #[test]
+    fn test_generate_pr_title() {
+        assert_eq!(generate_pr_title("feat/add-user-auth"), "Add user auth");
+        assert_eq!(generate_pr_title("fix/login-bug"), "Fix: login bug");
+        assert_eq!(generate_pr_title("my-feature"), "My feature");
+    }
+
+    #[test]
+    fn test_is_protected_branch() {
+        assert!(is_protected_branch("main"));
+        assert!(is_protected_branch("master"));
+        assert!(!is_protected_branch("feature/my-feature"));
+    }
+}
