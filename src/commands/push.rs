@@ -60,3 +60,73 @@ struct PrResponse {
 }
 
 /// Run the push command
+pub async fn run(config: &Config, options: PushOptions) -> Result<()> {
+    let repo = git::open_repo(None)?;
+    let branch = git::current_branch(&repo)?;
+
+    // Check if on protected branch
+    if is_protected_branch(&branch) && !options.force {
+        println!(
+            "{} You're on '{}'. Consider using a feature branch.",
+            "Warning:".yellow(),
+            branch
+        );
+    }
+
+    // Push to remote
+    println!("{} Pushing to remote...", "→".cyan());
+    push_to_remote(&branch, options.force, options.set_upstream)?;
+    println!("{} Pushed successfully", "✓".green());
+
+    // Create PR if requested
+    if options.create_pr {
+        let token = config.github_token()
+            .context("GitHub token required for PR creation. Set GITHUB_TOKEN env var or add to .bahn.toml")?;
+
+        println!("{} Creating pull request...", "→".cyan());
+
+        let pr_url = create_pull_request(
+            token,
+            &branch,
+            &options.base,
+            options.title,
+            options.body,
+            options.draft,
+            &repo,
+        ).await?;
+
+        println!("{} Pull request created: {}", "✓".green(), pr_url.cyan());
+    }
+
+    Ok(())
+}
+
+/// Push to remote
+fn push_to_remote(branch: &str, force: bool, set_upstream: bool) -> Result<()> {
+    let mut args = vec!["push"];
+
+    if set_upstream {
+        args.push("-u");
+        args.push("origin");
+    }
+
+    args.push(branch);
+
+    if force {
+        args.push("--force-with-lease");
+    }
+
+    let output = Command::new("git")
+        .args(&args)
+        .output()
+        .context("Failed to execute git push")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Git push failed: {}", stderr);
+    }
+
+    Ok(())
+}
+
+/// Create a pull request using GitHub API
