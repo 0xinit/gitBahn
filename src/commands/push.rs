@@ -130,3 +130,94 @@ fn push_to_remote(branch: &str, force: bool, set_upstream: bool) -> Result<()> {
 }
 
 /// Create a pull request using GitHub API
+async fn create_pull_request(
+    token: &str,
+    head: &str,
+    base: &str,
+    title: Option<String>,
+    body: Option<String>,
+    draft: bool,
+    repo: &git2::Repository,
+) -> Result<String> {
+    // Get repository info from remote URL
+    let (owner, repo_name) = get_repo_info(repo)?;
+
+    // Generate title from branch name or commits if not provided
+    let title = title.unwrap_or_else(|| generate_pr_title(head));
+
+    // Generate body from commits if not provided
+    let body = body.unwrap_or_else(|| generate_pr_body(repo, base).unwrap_or_default());
+
+    let request = CreatePrRequest {
+        title,
+        body,
+        head: head.to_string(),
+        base: base.to_string(),
+        draft,
+    };
+
+    let client = reqwest::Client::new();
+    let url = format!("https://api.github.com/repos/{}/{}/pulls", owner, repo_name);
+
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "gitBahn")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .json(&request)
+        .send()
+        .await
+        .context("Failed to send PR request")?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_default();
+        anyhow::bail!("GitHub API error ({}): {}", status, error_text);
+    }
+
+    let pr: PrResponse = response.json().await
+        .context("Failed to parse PR response")?;
+
+    Ok(pr.html_url)
+}
+
+/// Get owner and repo name from git remote
+fn get_repo_info(repo: &git2::Repository) -> Result<(String, String)> {
+    let remote = repo.find_remote("origin")
+        .context("No 'origin' remote found")?;
+
+    let url = remote.url()
+        .context("Could not get remote URL")?;
+
+    parse_github_url(url)
+}
+
+/// Parse GitHub URL to extract owner and repo
+fn parse_github_url(url: &str) -> Result<(String, String)> {
+    // Handle SSH format: git@github.com:owner/repo.git
+    if url.starts_with("git@github.com:") {
+        let path = url.trim_start_matches("git@github.com:");
+        let path = path.trim_end_matches(".git");
+        let parts: Vec<&str> = path.split('/').collect();
+        if parts.len() >= 2 {
+            return Ok((parts[0].to_string(), parts[1].to_string()));
+        }
+    }
+
+    // Handle HTTPS format: https://github.com/owner/repo.git
+    if url.contains("github.com") {
+        let path = url
+            .trim_start_matches("https://github.com/")
+            .trim_start_matches("http://github.com/")
+            .trim_end_matches(".git");
+        let parts: Vec<&str> = path.split('/').collect();
+        if parts.len() >= 2 {
+            return Ok((parts[0].to_string(), parts[1].to_string()));
+        }
+    }
+
+    anyhow::bail!("Could not parse GitHub repository from URL: {}", url)
+}
+
+/// Generate PR title from branch name
