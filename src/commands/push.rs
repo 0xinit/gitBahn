@@ -43,3 +43,20 @@ impl Default for PushOptions {
 
 /// GitHub PR creation request
 #[derive(Debug, Serialize)]
+struct CreatePrRequest {
+    title: String,
+    body: String,
+    head: String,
+    base: String,
+    draft: bool,
+}
+
+/// GitHub PR response
+#[derive(Debug, Deserialize)]
+struct PrResponse {
+    #[allow(dead_code)]
+    number: u64,
+    html_url: String,
+}
+
+/// Run the push command
