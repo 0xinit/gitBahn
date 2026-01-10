@@ -127,3 +127,42 @@ fn undo_commits(repo: &git2::Repository, count: usize, hard: bool) -> Result<()>
 }
 
 /// Show what the last N commits are (for preview)
+pub fn preview(count: usize) -> Result<()> {
+    let repo = git::open_repo(None)?;
+    let recent = git::get_recent_commits(&repo, count)?;
+
+    if recent.is_empty() {
+        println!("{} No commits in history", "Info:".cyan());
+        return Ok(());
+    }
+
+    println!("{} Last {} commit{}:", "→".cyan(), count, if count == 1 { "" } else { "s" });
+    for (i, msg) in recent.iter().enumerate() {
+        println!("  {}. {}", i + 1, msg);
+    }
+
+    let unpushed = git::count_unpushed_commits(&repo)?;
+    println!();
+    println!(
+        "{} {} commit{} can be safely undone (not pushed)",
+        "Info:".cyan(),
+        unpushed,
+        if unpushed == 1 { "" } else { "s" }
+    );
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_undo_options_default() {
+        let opts = UndoOptions::default();
+        assert_eq!(opts.count, 1);
+        assert!(!opts.hard);
+        assert!(!opts.yes);
+        assert!(!opts.force);
+    }
+}
