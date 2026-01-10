@@ -221,3 +221,91 @@ fn parse_github_url(url: &str) -> Result<(String, String)> {
 }
 
 /// Generate PR title from branch name
+fn generate_pr_title(branch: &str) -> String {
+    // Convert branch name to title
+    // e.g., "feat/add-user-auth" -> "Add user auth"
+    // e.g., "fix-123-login-bug" -> "Fix login bug"
+
+    let title = branch
+        .replace("feat/", "")
+        .replace("fix/", "Fix: ")
+        .replace("feature/", "")
+        .replace("bugfix/", "Fix: ")
+        .replace("hotfix/", "Hotfix: ")
+        .replace("chore/", "Chore: ")
+        .replace("docs/", "Docs: ")
+        .replace("refactor/", "Refactor: ")
+        .replace('-', " ")
+        .replace('_', " ");
+
+    // Capitalize first letter
+    let mut chars = title.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => c.to_uppercase().chain(chars).collect(),
+    }
+}
+
+/// Generate PR body from commits
+fn generate_pr_body(repo: &git2::Repository, base: &str) -> Result<String> {
+    // Get commits between base and HEAD
+    let commits = get_commits_since_base(repo, base)?;
+
+    if commits.is_empty() {
+        return Ok("No commits yet.".to_string());
+    }
+
+    let mut body = String::new();
+    body.push_str("## Changes\n\n");
+
+    for commit in commits.iter().take(20) {
+        body.push_str(&format!("- {}\n", commit));
+    }
+
+    if commits.len() > 20 {
+        body.push_str(&format!("\n...and {} more commits\n", commits.len() - 20));
+    }
+
+    body.push_str("\n---\n");
+    body.push_str("*Created with [gitBahn](https://github.com/gitBahn)*");
+
+    Ok(body)
+}
+
+/// Get commit messages since diverging from base branch
+fn get_commits_since_base(repo: &git2::Repository, base: &str) -> Result<Vec<String>> {
+    let mut messages = Vec::new();
+
+    // Try to find merge base
+    let head = repo.head()?.peel_to_commit()?;
+
+    let base_ref = format!("origin/{}", base);
+    let base_commit = match repo.revparse_single(&base_ref) {
+        Ok(obj) => obj.peel_to_commit()?,
+        Err(_) => {
+            // Try without origin/
+            match repo.revparse_single(base) {
+                Ok(obj) => obj.peel_to_commit()?,
+                Err(_) => return Ok(messages),
+            }
+        }
+    };
+
+    let merge_base = repo.merge_base(head.id(), base_commit.id())?;
+
+    let mut revwalk = repo.revwalk()?;
+    revwalk.push(head.id())?;
+    revwalk.hide(merge_base)?;
+
+    for oid in revwalk {
+        let oid = oid?;
+        let commit = repo.find_commit(oid)?;
+        if let Some(msg) = commit.message() {
+            messages.push(msg.lines().next().unwrap_or("").to_string());
+        }
+    }
+
+    Ok(messages)
+}
+
+/// Check if branch is protected (main, master, etc.)
