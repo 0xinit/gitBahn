@@ -286,3 +286,113 @@ fn mask_secret(secret: &str) -> String {
 }
 
 /// Check staged changes for secrets
+pub fn check_diff_for_secrets(diff: &str) -> Vec<SecretMatch> {
+    let mut all_matches = Vec::new();
+    let mut current_file = String::new();
+
+    for line in diff.lines() {
+        // Track current file
+        if line.starts_with("diff --git") {
+            let parts: Vec<&str> = line.split(' ').collect();
+            if parts.len() >= 4 {
+                current_file = parts[3].trim_start_matches("b/").to_string();
+            }
+            continue;
+        }
+
+        // Only check added lines
+        if line.starts_with('+') && !line.starts_with("+++") {
+            let content = &line[1..]; // Remove the + prefix
+            let matches = detect_secrets(content, &current_file);
+            for m in matches {
+                all_matches.push(m);
+            }
+        }
+    }
+
+    all_matches
+}
+
+/// Format secrets for display
+pub fn format_secret_warnings(secrets: &[SecretMatch]) -> String {
+    if secrets.is_empty() {
+        return String::new();
+    }
+
+    let mut output = String::new();
+    output.push_str("\n⚠️  POTENTIAL SECRETS DETECTED:\n");
+    output.push_str("─".repeat(50).as_str());
+    output.push('\n');
+
+    for secret in secrets {
+        output.push_str(&format!(
+            "  {} (confidence: {:.0}%)\n",
+            secret.secret_type,
+            secret.confidence * 100.0
+        ));
+        output.push_str(&format!(
+            "    File: {}:{}\n",
+            secret.file_path, secret.line
+        ));
+        output.push_str(&format!(
+            "    Value: {}\n\n",
+            secret.masked_value
+        ));
+    }
+
+    output.push_str("─".repeat(50).as_str());
+    output.push_str("\n\n");
+    output.push_str("Consider using environment variables or a secrets manager.\n");
+    output.push_str("Use --force to commit anyway (not recommended).\n");
+
+    output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_openai_key() {
+        let content = "OPENAI_API_KEY=sk-1234567890abcdefghijklmnop";
+        let matches = detect_secrets(content, "config.py");
+        assert!(!matches.is_empty());
+    }
+
+    #[test]
+    fn test_detect_aws_key() {
+        let content = "aws_access_key_id = AKIAIOSFODNN7EXAMPLE";
+        let matches = detect_secrets(content, ".env");
+        assert!(!matches.is_empty());
+    }
+
+    #[test]
+    fn test_detect_github_token() {
+        let content = "token: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+        let matches = detect_secrets(content, "config.yml");
+        assert!(!matches.is_empty());
+        assert!(matches.iter().any(|m| m.secret_type.contains("GitHub")));
+    }
+
+    #[test]
+    fn test_detect_private_key() {
+        let content = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQ...";
+        let matches = detect_secrets(content, "key.pem");
+        assert!(!matches.is_empty());
+        assert!(matches.iter().any(|m| m.secret_type.contains("Private Key")));
+    }
+
+    #[test]
+    fn test_skip_lock_files() {
+        assert!(should_skip_file("Cargo.lock"));
+        assert!(should_skip_file("package-lock.json"));
+        assert!(should_skip_file("yarn.lock"));
+    }
+
+    #[test]
+    fn test_mask_secret() {
+        assert_eq!(mask_secret("short"), "*****");
+        assert_eq!(mask_secret("medium-length-key"), "medi...-key");
+        assert_eq!(mask_secret("this-is-a-very-long-secret-key-value"), "this-i...-value");
+    }
+}
