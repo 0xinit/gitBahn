@@ -690,7 +690,7 @@ fn parse_js_file(
         let is_function = trimmed.starts_with("function ") || trimmed.starts_with("export function ")
             || trimmed.starts_with("const ") && trimmed.contains("=>")
             || trimmed.starts_with("export const ") && trimmed.contains("=>");
-        let is_export = trimmed.starts_with("export ");
+        let _is_export = trimmed.starts_with("export ");
 
         if brace_depth == 0 && (is_class || is_function) {
             if i > current_section_start + 2 {
