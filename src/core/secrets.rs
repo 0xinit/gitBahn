@@ -201,3 +201,88 @@ static COMPILED_PATTERNS: Lazy<Vec<(String, Regex, f64)>> = Lazy::new(|| {
 });
 
 /// Detect secrets in file content
+pub fn detect_secrets(content: &str, file_path: &str) -> Vec<SecretMatch> {
+    // Skip binary files and common non-secret files
+    if should_skip_file(file_path) {
+        return Vec::new();
+    }
+
+    let mut matches = Vec::new();
+
+    for (line_num, line) in content.lines().enumerate() {
+        // Skip comments in most languages (basic heuristic)
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") || trimmed.starts_with('#') || trimmed.starts_with("--") {
+            // Still check for actual secrets in comments (they shouldn't be there either)
+            // but with reduced confidence
+        }
+
+        for (name, pattern, confidence) in COMPILED_PATTERNS.iter() {
+            if let Some(m) = pattern.find(line) {
+                // Mask the secret value for safe display
+                let matched = m.as_str();
+                let masked = mask_secret(matched);
+
+                matches.push(SecretMatch {
+                    secret_type: name.clone(),
+                    line: line_num + 1,
+                    masked_value: masked,
+                    confidence: *confidence,
+                    file_path: file_path.to_string(),
+                });
+            }
+        }
+    }
+
+    // Deduplicate matches on the same line
+    matches.sort_by(|a, b| {
+        a.line.cmp(&b.line)
+            .then(b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    matches.dedup_by(|a, b| a.line == b.line && a.secret_type == b.secret_type);
+
+    matches
+}
+
+/// Check if we should skip this file type
+fn should_skip_file(file_path: &str) -> bool {
+    let path_lower = file_path.to_lowercase();
+
+    // Skip lock files
+    if path_lower.ends_with(".lock") || path_lower.ends_with("-lock.json") {
+        return true;
+    }
+
+    // Skip binary extensions
+    let binary_extensions = [
+        ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg",
+        ".woff", ".woff2", ".ttf", ".eot",
+        ".exe", ".dll", ".so", ".dylib",
+        ".zip", ".tar", ".gz", ".rar", ".7z",
+        ".pdf", ".doc", ".docx",
+        ".pyc", ".pyo", ".class",
+        ".o", ".a", ".lib",
+    ];
+
+    for ext in binary_extensions {
+        if path_lower.ends_with(ext) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Mask a secret value for safe display
+fn mask_secret(secret: &str) -> String {
+    let len = secret.len();
+    if len <= 8 {
+        "*".repeat(len)
+    } else if len <= 20 {
+        format!("{}...{}", &secret[..4], &secret[len-4..])
+    } else {
+        format!("{}...{}", &secret[..6], &secret[len-6..])
+    }
+}
+
+/// Check staged changes for secrets
