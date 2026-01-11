@@ -1,0 +1,9 @@
+{
+  "name": "gitbahn",
+  "version": "0.1.0",
+  "description": "Create realistic git commits that simulate human development flow. Transform AI-generated code into natural-looking commit history.",
+  "author": "gitBahn",
+  "repository": "https://github.com/example/gitBahn",
+  "license": "MIT",
+  "keywords": ["git", "commits", "ai", "realistic", "history", "development"]
+}
