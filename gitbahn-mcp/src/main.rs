@@ -294,3 +294,14 @@ impl ServerHandler for GitBahnServer {
 }
 
 #[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // Create server
+    let server = GitBahnServer::new();
+
+    // Run server using stdin/stdout
+    let transport = stdio();
+
+    serve_server(server, transport).await?;
+
+    Ok(())
+}
