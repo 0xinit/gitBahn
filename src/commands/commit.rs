@@ -10,6 +10,7 @@ use rand::Rng;
 use crate::config::Config;
 use crate::core::ai::{AiClient, ChunkInfo, HunkInfo};
 use crate::core::git;
+use crate::core::secrets;
 
 /// Options for the commit command
 pub struct CommitOptions {
@@ -184,6 +185,59 @@ pub async fn run(options: CommitOptions, config: &Config) -> Result<()> {
         }
         for (old, new) in &changes.renamed {
             println!("  {} {} → {}", "R".blue(), old, new);
+        }
+        println!();
+    }
+
+    // Branch awareness - warn if on protected branch
+    if is_protected_branch(&branch) {
+        println!(
+            "{} You are committing directly to '{}'. Consider using a feature branch.",
+            "Warning:".yellow().bold(),
+            branch.cyan()
+        );
+        if !options.auto_confirm {
+            let proceed = dialoguer::Confirm::new()
+                .with_prompt("Continue anyway?")
+                .default(false)
+                .interact()?;
+            if !proceed {
+                println!("{}", "Commit cancelled.".yellow());
+                return Ok(());
+            }
+        }
+        println!();
+    }
+
+    // Secret detection - scan for potential secrets in staged changes
+    let detected_secrets = secrets::check_diff_for_secrets(&changes.diff);
+    let high_confidence_secrets: Vec<_> = detected_secrets.iter()
+        .filter(|s| s.confidence >= 0.7)
+        .collect();
+
+    if !high_confidence_secrets.is_empty() {
+        println!("{}", secrets::format_secret_warnings(&high_confidence_secrets.iter().cloned().cloned().collect::<Vec<_>>()));
+
+        if !options.auto_confirm {
+            println!(
+                "{} Found {} potential secret(s) in staged changes!",
+                "Security:".red().bold(),
+                high_confidence_secrets.len()
+            );
+            let proceed = dialoguer::Confirm::new()
+                .with_prompt("Commit anyway? (Not recommended)")
+                .default(false)
+                .interact()?;
+            if !proceed {
+                println!("{}", "Commit cancelled. Please remove secrets before committing.".yellow());
+                return Ok(());
+            }
+        } else {
+            // In auto mode, refuse to commit secrets
+            anyhow::bail!(
+                "Refusing to auto-commit: {} potential secret(s) detected. Use interactive mode to override.",
+                high_confidence_secrets.len()
+            );
         }
         println!();
     }
@@ -990,4 +1044,12 @@ async fn run_realistic_commits(
     );
 
     Ok(())
+}
+
+/// Check if the current branch is a protected branch
+fn is_protected_branch(branch: &str) -> bool {
+    matches!(
+        branch.to_lowercase().as_str(),
+        "main" | "master" | "develop" | "development" | "production" | "staging" | "release"
+    )
 }
