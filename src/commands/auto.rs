@@ -15,6 +15,23 @@ use crate::core::git;
 use crate::core::lock::LockGuard;
 use crate::core::watcher::{FileWatcher, WatchEvent};
 
+/// Pause file name for watch mode
+const PAUSE_FILE: &str = ".bahn.pause";
+
+/// Check if watch mode is paused (by presence of pause file)
+fn is_paused() -> bool {
+    std::path::Path::new(PAUSE_FILE).exists()
+}
+
+/// Show pause status if paused
+fn check_pause_status() -> bool {
+    if is_paused() {
+        true
+    } else {
+        false
+    }
+}
+
 /// CLI options for auto mode
 pub struct AutoModeOptions {
     pub watch: bool,
@@ -46,8 +63,10 @@ struct AutoOptions {
 #[derive(Clone)]
 struct DeferredCommit {
     message: String,
+    #[allow(dead_code)]
     diff: String,
     files: Vec<String>,
+    #[allow(dead_code)]
     timestamp: Option<DateTime<Local>>,
 }
 
@@ -829,7 +848,8 @@ async fn run_event_watch_mode(ai: &AiClient, options: &AutoOptions) -> Result<()
     if options.rewrite_history {
         println!("History rewriting enabled (squash after {} commits)", options.squash_threshold);
     }
-    println!("Press Ctrl+C to stop\n");
+    println!("Press Ctrl+C to stop");
+    println!("{} Create '{}' file to pause, delete to resume\n", "Tip:".cyan(), PAUSE_FILE);
 
     let watcher = FileWatcher::new(500);
     let rx = watcher.watch(PathBuf::from(repo_root))?;
@@ -837,8 +857,30 @@ async fn run_event_watch_mode(ai: &AiClient, options: &AutoOptions) -> Result<()
     let mut commit_count = 0;
     let mut commits_since_squash = 0;
     let mut shutdown = false;
+    let mut was_paused = false;
 
     while !shutdown && commit_count < options.max_commits {
+        // Check pause state
+        if check_pause_status() {
+            if !was_paused {
+                println!("{} Paused. Delete '{}' to resume.", "⏸".yellow().bold(), PAUSE_FILE);
+                was_paused = true;
+            }
+            // Still need to check for Ctrl+C
+            select! {
+                biased;
+                _ = tokio::signal::ctrl_c() => {
+                    println!("\n{}", "Received Ctrl+C, shutting down gracefully...".yellow());
+                    shutdown = true;
+                }
+                _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {}
+            }
+            continue;
+        } else if was_paused {
+            println!("{} Resumed.", "▶".green().bold());
+            was_paused = false;
+        }
+
         match rx.recv_timeout(std::time::Duration::from_millis(100)) {
             Ok(WatchEvent::FilesChanged(paths)) => {
                 println!("{} {} file(s) changed",
@@ -896,12 +938,32 @@ async fn run_polling_watch_mode(ai: &AiClient, options: &AutoOptions) -> Result<
     if options.rewrite_history {
         println!("History rewriting enabled (squash after {} commits)", options.squash_threshold);
     }
-    println!("Press Ctrl+C to stop\n");
+    println!("Press Ctrl+C to stop");
+    println!("{} Create '{}' file to pause, delete to resume\n", "Tip:".cyan(), PAUSE_FILE);
 
     let mut commit_count = 0;
     let mut commits_since_squash = 0;
+    let mut was_paused = false;
 
     loop {
+        // Check pause state
+        if check_pause_status() {
+            if !was_paused {
+                println!("{} Paused. Delete '{}' to resume.", "⏸".yellow().bold(), PAUSE_FILE);
+                was_paused = true;
+            }
+            select! {
+                _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {}
+                _ = tokio::signal::ctrl_c() => {
+                    println!("\n{}", "Received Ctrl+C, shutting down gracefully...".yellow());
+                    break;
+                }
+            }
+            continue;
+        } else if was_paused {
+            println!("{} Resumed.", "▶".green().bold());
+            was_paused = false;
+        }
         if commit_count >= options.max_commits {
             println!("{}", "Max commits reached. Stopping.".yellow());
             break;
