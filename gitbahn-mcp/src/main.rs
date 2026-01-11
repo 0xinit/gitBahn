@@ -244,3 +244,53 @@ impl GitBahnServer {
 }
 
 /// Run a bahn CLI command and return output
+fn run_bahn_command(args: &[String]) -> String {
+    match Command::new("bahn")
+        .args(args)
+        .output()
+    {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+
+            if output.status.success() {
+                if stdout.is_empty() {
+                    "Command completed successfully.".to_string()
+                } else {
+                    stdout.to_string()
+                }
+            } else {
+                format!("Command failed:\n{}\n{}", stdout, stderr)
+            }
+        }
+        Err(e) => format!("Error running bahn: {}. Make sure gitBahn is installed (cargo install --path /path/to/gitBahn)", e),
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for GitBahnServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo {
+            protocol_version: ProtocolVersion::LATEST,
+            capabilities: ServerCapabilities {
+                tools: Some(ToolsCapability::default()),
+                ..Default::default()
+            },
+            server_info: Implementation {
+                name: "gitbahn-mcp".to_string(),
+                title: Some("gitBahn MCP Server".to_string()),
+                version: "0.1.0".to_string(),
+                icons: None,
+                website_url: Some("https://github.com/example/gitBahn".to_string()),
+            },
+            instructions: Some(
+                "gitBahn MCP server provides tools for creating realistic git commits. \
+                Use realistic_commit for new projects to simulate human development flow. \
+                Use atomic_commit to split by files. Use granular_commit to split by hunks. \
+                All tools support timestamp spreading for natural-looking commit history.".to_string()
+            ),
+        }
+    }
+}
+
+#[tokio::main]
