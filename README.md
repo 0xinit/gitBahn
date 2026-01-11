@@ -237,6 +237,41 @@ bahn docs src/lib.rs --format markdown
 bahn status
 ```
 
+## Claude Code Integration (MCP Server)
+
+gitBahn includes an MCP (Model Context Protocol) server that lets Claude directly create realistic commits.
+
+### Installation
+
+```bash
+cd gitbahn-mcp
+cargo install --path .
+```
+
+### Configuration
+
+Add to `~/.claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "gitbahn": {
+      "command": "gitbahn-mcp"
+    }
+  }
+}
+```
+
+### Usage with Claude
+
+Once configured, Claude can use gitBahn tools directly:
+
+> "Stage all my changes and create 30 realistic commits spread over the past 2 days"
+
+Claude will automatically use the `stage_all` and `realistic_commit` tools.
+
+See [gitbahn-mcp/README.md](gitbahn-mcp/README.md) for full documentation.
+
 ## License
 
 MIT
