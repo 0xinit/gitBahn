@@ -161,6 +161,56 @@ enum Commands {
 
     /// Show repository status
     Status,
+
+    /// Push to remote with optional PR creation
+    Push {
+        /// Create a pull request after pushing
+        #[arg(long)]
+        pr: bool,
+
+        /// PR title
+        #[arg(long)]
+        title: Option<String>,
+
+        /// PR body/description
+        #[arg(long)]
+        body: Option<String>,
+
+        /// Target branch for PR (default: main)
+        #[arg(long, default_value = "main")]
+        base: String,
+
+        /// Create as draft PR
+        #[arg(long)]
+        draft: bool,
+
+        /// Force push (with lease)
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Undo the last commit(s)
+    Undo {
+        /// Number of commits to undo
+        #[arg(default_value = "1")]
+        count: usize,
+
+        /// Hard reset - discard all changes (DANGEROUS)
+        #[arg(long)]
+        hard: bool,
+
+        /// Skip confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+
+        /// Force undo even for pushed commits
+        #[arg(long)]
+        force: bool,
+
+        /// Preview what would be undone without doing it
+        #[arg(long)]
+        preview: bool,
+    },
 }
 
 #[tokio::main]
@@ -223,6 +273,33 @@ async fn main() -> Result<()> {
 
         Commands::Status => {
             commands::status::run()
+        }
+
+        Commands::Push { pr, title, body, base, draft, force } => {
+            let options = commands::push::PushOptions {
+                create_pr: pr,
+                title,
+                body,
+                base,
+                draft,
+                force,
+                set_upstream: true,
+            };
+            commands::push::run(&config, options).await
+        }
+
+        Commands::Undo { count, hard, yes, force, preview } => {
+            if preview {
+                commands::undo::preview(count)
+            } else {
+                let options = commands::undo::UndoOptions {
+                    count,
+                    hard,
+                    yes,
+                    force,
+                };
+                commands::undo::run(options)
+            }
         }
     }
 }
