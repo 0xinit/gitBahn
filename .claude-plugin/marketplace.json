@@ -1,0 +1,53 @@
+{
+  "name": "gitbahn-marketplace",
+  "owner": {
+    "name": "naruto11",
+    "email": "naruto11@users.noreply.github.com"
+  },
+  "metadata": {
+    "description": "AI-powered git commit tools for realistic development history",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "gitbahn",
+      "source": "./",
+      "description": "Create realistic git commits that simulate human development flow. Transform AI-generated code into natural-looking commit history with intelligent splitting, timestamp spreading, and conventional commit messages.",
+      "version": "0.1.0",
+      "author": {
+        "name": "naruto11"
+      },
+      "homepage": "https://github.com/example/gitBahn",
+      "repository": "https://github.com/example/gitBahn",
+      "license": "MIT",
+      "keywords": [
+        "git",
+        "commits",
+        "ai",
+        "realistic",
+        "history",
+        "development",
+        "mcp",
+        "automation"
+      ],
+      "category": "developer-tools",
+      "tags": [
+        "git",
+        "version-control",
+        "ai-assisted",
+        "commit-generation",
+        "workflow"
+      ],
+      "mcpServers": {
+        "gitbahn": {
+          "command": "${CLAUDE_PLUGIN_ROOT}/target/release/gitbahn-mcp",
+          "args": []
+        }
+      },
+      "commands": [
+        "./commands/"
+      ],
+      "strict": true
+    }
+  ]
+}
