@@ -289,7 +289,7 @@ async fn run_single_commit(
     pb.set_message("Generating commit message...");
 
     // Generate commit message
-    let message = ai.generate_commit_message(&changes.diff, context, personality).await?;
+    let message = ai.generate_commit_message(&changes.diff, context, personality, None).await?;
 
     pb.finish_and_clear();
 
@@ -505,7 +505,7 @@ async fn run_atomic_commits(
             let remaining = git::get_staged_changes(&repo_final)?;
 
             if !remaining.is_empty() {
-                let message = ai.generate_commit_message(&remaining.diff, context, personality).await?;
+                let message = ai.generate_commit_message(&remaining.diff, context, personality, None).await?;
                 let oid = git::create_commit(&repo_final, &message, false)?;
                 created += 1;
 
@@ -735,7 +735,7 @@ async fn run_granular_commits(
             let remaining = git::get_staged_changes(&repo_final)?;
 
             if !remaining.is_empty() {
-                let message = ai.generate_commit_message(&remaining.diff, None, None).await?;
+                let message = ai.generate_commit_message(&remaining.diff, None, None, None).await?;
                 let oid = git::create_commit(&repo_final, &message, false)?;
                 created += 1;
 
@@ -1023,7 +1023,7 @@ async fn run_realistic_commits(
             let remaining = git::get_staged_changes(&repo_final)?;
 
             if !remaining.is_empty() {
-                let message = ai.generate_commit_message(&remaining.diff, None, None).await?;
+                let message = ai.generate_commit_message(&remaining.diff, None, None, None).await?;
                 let oid = git::create_commit(&repo_final, &message, false)?;
                 created += 1;
 

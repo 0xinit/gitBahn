@@ -61,8 +61,9 @@ impl AiClient {
         diff: &str,
         context: Option<&str>,
         personality: Option<&str>,
+        template: Option<&str>,
     ) -> Result<String> {
-        let system_prompt = self.build_commit_system_prompt(personality);
+        let system_prompt = self.build_commit_system_prompt(personality, template);
 
         let mut user_content = String::new();
         user_content.push_str("Generate a commit message for the following changes:\n\n");
@@ -483,8 +484,32 @@ Only output the documentation, ready to be inserted into the code."#,
     }
 
     /// Build system prompt for commit messages
-    fn build_commit_system_prompt(&self, personality: Option<&str>) -> String {
-        let base = r#"You are an expert at writing clear, concise git commit messages.
+    fn build_commit_system_prompt(&self, personality: Option<&str>, template: Option<&str>) -> String {
+        let base = if let Some(tmpl) = template {
+            format!(
+                r#"You are an expert at writing clear, concise git commit messages.
+
+Use this EXACT template format for your commit message:
+{}
+
+Template placeholders:
+- {{type}} = commit type (feat, fix, docs, style, refactor, test, chore, perf, ci, build)
+- {{scope}} = affected component/module (optional, omit parentheses if not applicable)
+- {{description}} = brief description in imperative mood
+- {{body}} = optional longer description (if template includes it)
+- {{issue}} = issue/ticket number (if template includes it)
+
+Rules:
+- Keep the first line under 72 characters
+- Use imperative mood ("add" not "added")
+- Focus on WHY, not just WHAT
+- Fill in all placeholders appropriately
+
+Output ONLY the commit message with placeholders filled in, nothing else."#,
+                tmpl
+            )
+        } else {
+            r#"You are an expert at writing clear, concise git commit messages.
 
 Follow the Conventional Commits specification:
 - Format: <type>(<scope>): <description>
@@ -493,12 +518,13 @@ Follow the Conventional Commits specification:
 - Use imperative mood ("add" not "added")
 - Focus on WHY, not just WHAT
 
-Output ONLY the commit message, nothing else."#;
+Output ONLY the commit message, nothing else."#.to_string()
+        };
 
         if let Some(p) = personality {
             format!("{}\n\nPersonality: {}", base, p)
         } else {
-            base.to_string()
+            base
         }
     }
 

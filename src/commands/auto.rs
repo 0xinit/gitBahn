@@ -282,7 +282,7 @@ async fn run_single(ai: &AiClient, dry_run: bool) -> Result<()> {
         changes.stats.deletions.to_string().red()
     );
 
-    let message = ai.generate_commit_message(&changes.diff, None, None).await?;
+    let message = ai.generate_commit_message(&changes.diff, None, None, None).await?;
 
     if dry_run {
         println!("{}", "[DRY RUN]".yellow().bold());
@@ -359,7 +359,7 @@ async fn run_prompt_watch_mode(ai: &AiClient, options: &AutoOptions) -> Result<(
                 };
 
                 // Generate commit message with context
-                let message = ai.generate_commit_message(&changes.diff, session_context.as_deref(), None).await?;
+                let message = ai.generate_commit_message(&changes.diff, session_context.as_deref(), None, None).await?;
                 println!("  Suggested: {}", message.lines().next().unwrap_or("").cyan());
 
                 // Prompt user
@@ -625,6 +625,7 @@ async fn run_defer_watch_mode(ai: &AiClient, options: &AutoOptions) -> Result<()
                 let message = ai.generate_commit_message(
                     &changes.diff,
                     session_context.as_deref(),
+                    None,
                     None
                 ).await?;
 
@@ -1027,7 +1028,7 @@ async fn check_and_commit(ai: &AiClient, dry_run: bool, commit_count: &mut usize
         let changes = git::get_staged_changes(&repo)?;
 
         if !changes.is_empty() {
-            let message = ai.generate_commit_message(&changes.diff, None, None).await?;
+            let message = ai.generate_commit_message(&changes.diff, None, None, None).await?;
 
             if dry_run {
                 println!("{} Would commit: {}",
