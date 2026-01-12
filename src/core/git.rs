@@ -1402,16 +1402,8 @@ pub fn create_commit_at(
     let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
 
     let commit_id = if sign {
-        // GPG signing would require additional setup
-        // For now, create a regular commit
-        repo.commit(
-            Some("HEAD"),
-            &signature,
-            &signature,
-            message,
-            &tree,
-            &parent_refs,
-        )?
+        // Create signed commit using GPG
+        create_signed_commit(repo, &signature, message, &tree, &parent_refs)?
     } else {
         repo.commit(
             Some("HEAD"),
@@ -1424,6 +1416,83 @@ pub fn create_commit_at(
     };
 
     Ok(commit_id)
+}
+
+/// Create a GPG-signed commit
+fn create_signed_commit(
+    repo: &Repository,
+    signature: &Signature,
+    message: &str,
+    tree: &git2::Tree,
+    parents: &[&git2::Commit],
+) -> Result<git2::Oid> {
+    // Get the signing key from git config
+    let config = repo.config()?;
+    let signing_key = config.get_string("user.signingkey")
+        .or_else(|_| config.get_string("user.email"))
+        .context("No signing key configured. Set user.signingkey in git config.")?;
+
+    // Create the commit buffer (unsigned commit content)
+    let commit_buf = repo.commit_create_buffer(
+        signature,  // author
+        signature,  // committer
+        message,
+        tree,
+        parents,
+    )?;
+
+    let commit_content = std::str::from_utf8(&commit_buf)
+        .context("Invalid UTF-8 in commit content")?;
+
+    // Sign the commit content with GPG
+    let gpg_signature = sign_with_gpg(commit_content, &signing_key)?;
+
+    // Create the signed commit
+    let commit_id = repo.commit_signed(
+        commit_content,
+        &gpg_signature,
+        Some("gpgsig"),
+    )?;
+
+    // Update HEAD to point to the new commit
+    repo.reference(
+        "HEAD",
+        commit_id,
+        true,
+        &format!("commit: {}", message.lines().next().unwrap_or("")),
+    )?;
+
+    Ok(commit_id)
+}
+
+/// Sign content using GPG
+fn sign_with_gpg(content: &str, key: &str) -> Result<String> {
+    let mut child = Command::new("gpg")
+        .args(["--status-fd", "2", "-bsau", key, "--armor"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Failed to spawn gpg process. Is GPG installed?")?;
+
+    // Write content to gpg stdin
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(content.as_bytes())
+            .context("Failed to write to gpg stdin")?;
+    }
+
+    let output = child.wait_with_output()
+        .context("Failed to wait for gpg process")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("GPG signing failed: {}", stderr);
+    }
+
+    let signature = String::from_utf8(output.stdout)
+        .context("Invalid UTF-8 in GPG signature")?;
+
+    Ok(signature)
 }
 
 /// Stage specific files (add to index)
