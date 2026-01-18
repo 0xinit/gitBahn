@@ -1,7 +1,7 @@
 {
   "name": "gitbahn",
-  "version": "0.1.0",
-  "description": "Create realistic git commits that simulate human development flow. Transform AI-generated code into natural-looking commit history.",
+  "version": "0.2.0",
+  "description": "Git operations for Claude Code. Create commits with AI-generated messages - no API key needed.",
   "author": {
     "name": "naruto11"
   },  

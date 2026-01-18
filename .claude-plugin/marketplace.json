@@ -5,15 +5,15 @@
     "email": "naruto11@users.noreply.github.com"
   },
   "metadata": {
-    "description": "AI-powered git commit tools for realistic development history",
-    "version": "0.1.0"
+    "description": "Git operations for Claude Code - no API key needed for AI commits",
+    "version": "0.2.0"
   },
   "plugins": [
     {
       "name": "gitbahn",
       "source": "./",
-      "description": "Create realistic git commits that simulate human development flow. Transform AI-generated code into natural-looking commit history with intelligent splitting, timestamp spreading, and conventional commit messages.",
-      "version": "0.1.0",
+      "description": "Git operations for Claude Code. Create commits with AI-generated messages without needing an API key - Claude Code analyzes diffs and generates messages directly. Supports realistic commit history with timestamp spreading.",
+      "version": "0.2.0",
       "author": {
         "name": "naruto11"
       },
