@@ -237,20 +237,60 @@ bahn docs src/lib.rs --format markdown
 bahn status
 ```
 
-## Claude Code Integration (MCP Server)
+## Claude Code Plugin (Recommended)
 
-gitBahn includes an MCP (Model Context Protocol) server that lets Claude directly create realistic commits.
+Use gitBahn as a Claude Code plugin - **no API key needed**. Claude Code handles all AI operations directly.
 
-### Installation
+### Install as Plugin
 
 ```bash
-cd gitbahn-mcp
-cargo install --path .
+claude plugin add https://github.com/0xinit/gitBahn
 ```
 
-### Configuration
+Or manually:
+```bash
+cd ~/.claude/plugins
+git clone https://github.com/0xinit/gitBahn.git gitbahn
+cd gitbahn/gitbahn-mcp
+cargo build --release
+```
 
-Add to `~/.claude/claude_desktop_config.json`:
+### Usage
+
+Just talk to Claude Code naturally:
+
+```
+"Commit my changes"
+"Create realistic commits spread over 4 hours"
+"Split my changes into atomic commits"
+"Create 10 commits spread over 2 days starting yesterday at 9am"
+```
+
+### Available Tools
+
+**Git Operations:**
+- `get_status`, `get_diff`, `list_changes`
+- `stage_all`, `stage_files`, `unstage_all`
+- `create_commit` (with optional timestamp for backdating)
+- `get_log`, `get_branch`, `push`, `undo`
+
+**Smart Split Suggestions:**
+- `suggest_realistic_split` - Language-aware splitting (imports → classes → functions)
+- `suggest_atomic_split` - One file per commit
+- `suggest_granular_split` - Split by diff hunks
+
+### How It Works
+
+When you ask for realistic commits, Claude Code:
+1. Calls `suggest_realistic_split` → gets file groupings
+2. For each group: stages files, analyzes diff, generates commit message
+3. Calls `create_commit` with message and timestamp
+
+**No Anthropic API key needed** - Claude Code does the AI work directly.
+
+### Manual MCP Configuration
+
+If not using as a plugin, add to your `.mcp.json`:
 
 ```json
 {
@@ -261,16 +301,6 @@ Add to `~/.claude/claude_desktop_config.json`:
   }
 }
 ```
-
-### Usage with Claude
-
-Once configured, Claude can use gitBahn tools directly:
-
-> "Stage all my changes and create 30 realistic commits spread over the past 2 days"
-
-Claude will automatically use the `stage_all` and `realistic_commit` tools.
-
-See [gitbahn-mcp/README.md](gitbahn-mcp/README.md) for full documentation.
 
 ## License
 
