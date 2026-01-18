@@ -27,6 +27,78 @@ commit a504534  Jan 05, 02:23  docs: add comprehensive README
 
 **Small focused commits. Spread over time. Natural development progression.**
 
+## Quick Start (Claude Code Plugin)
+
+The easiest way to use gitBahn - **no API key needed**.
+
+### Install
+
+```bash
+claude plugin add https://github.com/0xinit/gitBahn
+```
+
+### Use
+
+Just talk to Claude Code:
+
+```
+"Commit my changes"
+"Create realistic commits spread over 4 hours"
+"Split my changes into atomic commits"
+"Create 10 commits spread over 2 days starting yesterday at 9am"
+```
+
+That's it. Claude Code handles the AI work directly.
+
+### Available Tools
+
+**Git Operations:**
+- `get_status`, `get_diff`, `list_changes`
+- `stage_all`, `stage_files`, `unstage_all`
+- `create_commit` (with optional timestamp for backdating)
+- `get_log`, `get_branch`, `push`, `undo`
+
+**Smart Split Suggestions:**
+- `suggest_realistic_split` - Language-aware splitting (imports → classes → functions)
+- `suggest_atomic_split` - One file per commit
+- `suggest_granular_split` - Split by diff hunks
+
+### Manual MCP Setup
+
+If not using as a plugin, add to your `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "gitbahn": {
+      "command": "gitbahn-mcp"
+    }
+  }
+}
+```
+
+---
+
+## Standalone CLI
+
+For use outside Claude Code. Requires Anthropic API key.
+
+### Installation
+
+```bash
+cargo install --path .
+export ANTHROPIC_API_KEY=your_key_here
+```
+
+### Features
+
+- **AI Commit**: Generate intelligent commit messages from diffs
+- **Auto Mode**: Watch for changes and auto-commit with AI messages
+- **Code Rewrite**: Transform code with natural language instructions
+- **AI Merge**: Resolve merge conflicts automatically with AI
+- **Code Review**: Get AI-powered code reviews
+- **Docs Generation**: Generate documentation for your code
+
 ### What gitBahn Offers
 
 | Feature | Standard Git | gitBahn |
@@ -44,36 +116,7 @@ commit a504534  Jan 05, 02:23  docs: add comprehensive README
 - Teams that want organized, readable git logs
 - Anyone using AI assistants who wants natural-looking commits
 
-## Features
-
-- **AI Commit**: Generate intelligent commit messages from diffs
-- **Auto Mode**: Watch for changes and auto-commit with AI messages
-- **Code Rewrite**: Transform code with natural language instructions
-- **AI Merge**: Resolve merge conflicts automatically with AI
-- **Code Review**: Get AI-powered code reviews
-- **Docs Generation**: Generate documentation for your code
-
-## Installation
-
-```bash
-cargo install --path .
-```
-
-## Configuration
-
-Set your Anthropic API key:
-
-```bash
-export ANTHROPIC_API_KEY=your_key_here
-```
-
-Or initialize with a config file:
-
-```bash
-bahn init
-```
-
-## Usage
+## CLI Usage
 
 ### Commit with AI
 
@@ -102,6 +145,35 @@ bahn commit -g --split 15 --spread 2h --start "2025-01-05 09:00"
 # Auto-confirm without prompting
 bahn commit -y
 ```
+
+### Realistic Mode (Maximum Authenticity)
+
+```bash
+# Simulate human development flow
+bahn commit --realistic
+
+# Target specific commit count spread over time
+bahn commit --realistic --split 47 --spread 48h --start "2025-01-03 11:17"
+
+# Short form with auto-confirm
+bahn commit -r --split 30 --spread 24h -y
+```
+
+**`--realistic` mode** simulates how a human developer actually builds a project:
+
+1. **Language-aware parsing** - Understands Python, Rust, JavaScript/TypeScript, and Go
+2. **Logical chunking** - Splits files into imports, constants, classes, and individual methods
+3. **Dependency ordering** - Config files first, then utils, models, services, and finally entry points
+4. **Progressive building** - Large files grow across multiple commits (imports → class skeleton → methods)
+5. **Natural interleaving** - Work on module A, switch to B, come back to A
+
+**Commit Mode Comparison:**
+
+| Mode | Splits by | Best for |
+|------|-----------|----------|
+| `--atomic` | Whole files | Quick splitting |
+| `--granular` | Hunks (diff chunks) | Modified files |
+| `--realistic` | Logical code units | New projects, maximum authenticity |
 
 ### Autonomous Mode
 
@@ -136,56 +208,6 @@ bahn auto --watch --defer --spread 4h --start "2025-01-05 09:00"
 - Skip
 
 **`--defer` mode** collects all commits during your session, then creates them with randomly spread timestamps when you press Ctrl+C. Perfect for making AI-assisted coding look natural.
-
-### Granular Commits (Ultra-Realistic)
-
-```bash
-# Split individual files into hunks (chunks) for realistic history
-bahn commit --granular
-
-# Combine with spread timestamps
-bahn commit -g --spread 4h --start "2025-01-05 09:00"
-
-# Request specific number of commits
-bahn commit -g --split 20 --spread 6h -y
-```
-
-**`--granular` mode** analyzes your changes at the hunk level (individual chunks within files) rather than whole files. This creates commits that look like natural, incremental development:
-
-- A single file can be split across multiple commits
-- Related hunks across files are grouped together
-- Earlier commits contain foundational code (imports, types)
-- Later commits build on earlier ones (implementations)
-- Each commit is self-contained and won't break the build
-
-### Realistic Mode (Maximum Authenticity)
-
-```bash
-# Simulate human development flow
-bahn commit --realistic
-
-# Target specific commit count spread over time
-bahn commit --realistic --split 47 --spread 48h --start "2025-01-03 11:17"
-
-# Short form with auto-confirm
-bahn commit -r --split 30 --spread 24h -y
-```
-
-**`--realistic` mode** is the most sophisticated option. It simulates how a human developer actually builds a project:
-
-1. **Language-aware parsing** - Understands Python, Rust, JavaScript/TypeScript, and Go
-2. **Logical chunking** - Splits files into imports, constants, classes, and individual methods
-3. **Dependency ordering** - Config files first, then utils, models, services, and finally entry points
-4. **Progressive building** - Large files grow across multiple commits (imports → class skeleton → methods)
-5. **Natural interleaving** - Work on module A, switch to B, come back to A
-
-**Commit Mode Comparison:**
-
-| Mode | Splits by | Best for |
-|------|-----------|----------|
-| `--atomic` | Whole files | Quick splitting |
-| `--granular` | Hunks (diff chunks) | Modified files |
-| `--realistic` | Logical code units | New projects, maximum authenticity |
 
 ### Code Rewrite
 
@@ -235,71 +257,6 @@ bahn docs src/lib.rs --format markdown
 ```bash
 # Show repository status
 bahn status
-```
-
-## Claude Code Plugin (Recommended)
-
-Use gitBahn as a Claude Code plugin - **no API key needed**. Claude Code handles all AI operations directly.
-
-### Install as Plugin
-
-```bash
-claude plugin add https://github.com/0xinit/gitBahn
-```
-
-Or manually:
-```bash
-cd ~/.claude/plugins
-git clone https://github.com/0xinit/gitBahn.git gitbahn
-cd gitbahn/gitbahn-mcp
-cargo build --release
-```
-
-### Usage
-
-Just talk to Claude Code naturally:
-
-```
-"Commit my changes"
-"Create realistic commits spread over 4 hours"
-"Split my changes into atomic commits"
-"Create 10 commits spread over 2 days starting yesterday at 9am"
-```
-
-### Available Tools
-
-**Git Operations:**
-- `get_status`, `get_diff`, `list_changes`
-- `stage_all`, `stage_files`, `unstage_all`
-- `create_commit` (with optional timestamp for backdating)
-- `get_log`, `get_branch`, `push`, `undo`
-
-**Smart Split Suggestions:**
-- `suggest_realistic_split` - Language-aware splitting (imports → classes → functions)
-- `suggest_atomic_split` - One file per commit
-- `suggest_granular_split` - Split by diff hunks
-
-### How It Works
-
-When you ask for realistic commits, Claude Code:
-1. Calls `suggest_realistic_split` → gets file groupings
-2. For each group: stages files, analyzes diff, generates commit message
-3. Calls `create_commit` with message and timestamp
-
-**No Anthropic API key needed** - Claude Code does the AI work directly.
-
-### Manual MCP Configuration
-
-If not using as a plugin, add to your `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "gitbahn": {
-      "command": "gitbahn-mcp"
-    }
-  }
-}
 ```
 
 ## License
