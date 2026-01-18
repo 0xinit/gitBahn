@@ -1,6 +1,7 @@
 //! gitBahn MCP Server
 //!
-//! Exposes gitBahn's commit tools to AI assistants via Model Context Protocol.
+//! Thin git operations layer for Claude Code. No AI calls - Claude Code handles
+//! commit message generation directly.
 
 use std::process::Command;
 use rmcp::{
@@ -16,72 +17,76 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-/// Request for realistic commit mode
+/// Request for staging specific files
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct RealisticCommitRequest {
-    /// Target number of commits to create
-    #[schemars(description = "Number of commits to split changes into (e.g., 30)")]
-    pub split: Option<u32>,
-
-    /// Time duration to spread commits over (e.g., "24h", "48h", "7d")
-    #[schemars(description = "Duration to spread commits over (e.g., '24h', '48h', '7d')")]
-    pub spread: Option<String>,
-
-    /// Start time for commits (e.g., "2025-01-03 11:17")
-    #[schemars(description = "Start timestamp for commits (e.g., '2025-01-03 11:17')")]
-    pub start: Option<String>,
-
-    /// Auto-confirm without prompting
-    #[schemars(description = "Auto-confirm without prompting (default: true)")]
-    pub auto_confirm: Option<bool>,
+pub struct StageFilesRequest {
+    /// Files to stage (paths relative to repo root)
+    #[schemars(description = "List of file paths to stage")]
+    pub files: Vec<String>,
 }
 
-/// Request for atomic commit mode
+/// Request for creating a commit
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct AtomicCommitRequest {
-    /// Target number of commits
-    #[schemars(description = "Number of commits to split changes into")]
-    pub split: Option<u32>,
+pub struct CreateCommitRequest {
+    /// Commit message
+    #[schemars(description = "The commit message")]
+    pub message: String,
 
-    /// Time duration to spread commits over
-    #[schemars(description = "Duration to spread commits over (e.g., '4h', '24h')")]
-    pub spread: Option<String>,
-
-    /// Start time for commits
-    #[schemars(description = "Start timestamp for commits (e.g., '2025-01-03 11:17')")]
-    pub start: Option<String>,
-
-    /// Auto-confirm without prompting
-    #[schemars(description = "Auto-confirm without prompting (default: true)")]
-    pub auto_confirm: Option<bool>,
+    /// Optional timestamp for backdating (e.g., "2025-01-03 11:17")
+    #[schemars(description = "Optional timestamp for the commit (e.g., '2025-01-03 11:17')")]
+    pub timestamp: Option<String>,
 }
 
-/// Request for granular commit mode
+/// Request for getting diff
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct GranularCommitRequest {
-    /// Target number of commits
-    #[schemars(description = "Number of commits to split changes into")]
-    pub split: Option<u32>,
+pub struct GetDiffRequest {
+    /// Whether to get staged diff only (default: true)
+    #[schemars(description = "Get staged changes only (default: true). Set to false for unstaged changes.")]
+    pub staged: Option<bool>,
 
-    /// Time duration to spread commits over
-    #[schemars(description = "Duration to spread commits over (e.g., '4h', '24h')")]
-    pub spread: Option<String>,
-
-    /// Start time for commits
-    #[schemars(description = "Start timestamp for commits (e.g., '2025-01-03 11:17')")]
-    pub start: Option<String>,
-
-    /// Auto-confirm without prompting
-    #[schemars(description = "Auto-confirm without prompting (default: true)")]
-    pub auto_confirm: Option<bool>,
+    /// Specific files to get diff for
+    #[schemars(description = "Optional list of specific files to get diff for")]
+    pub files: Option<Vec<String>>,
 }
 
-/// Request for simple AI commit
+/// Request for getting commit log
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct SimpleCommitRequest {
-    /// Auto-confirm without prompting
-    #[schemars(description = "Auto-confirm without prompting (default: true)")]
-    pub auto_confirm: Option<bool>,
+pub struct GetLogRequest {
+    /// Number of commits to show
+    #[schemars(description = "Number of commits to show (default: 10)")]
+    pub count: Option<u32>,
+
+    /// Show full commit messages
+    #[schemars(description = "Show full commit messages instead of one-line format")]
+    pub full: Option<bool>,
+}
+
+/// Request for push
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PushRequest {
+    /// Remote name (default: origin)
+    #[schemars(description = "Remote name (default: origin)")]
+    pub remote: Option<String>,
+
+    /// Branch name (default: current branch)
+    #[schemars(description = "Branch name (default: current branch)")]
+    pub branch: Option<String>,
+
+    /// Force push
+    #[schemars(description = "Force push (use with caution)")]
+    pub force: Option<bool>,
+}
+
+/// Request for undo
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UndoRequest {
+    /// Number of commits to undo
+    #[schemars(description = "Number of commits to undo (default: 1)")]
+    pub count: Option<u32>,
+
+    /// Hard reset (discard changes)
+    #[schemars(description = "Hard reset - discard changes (default: false, keeps changes staged)")]
+    pub hard: Option<bool>,
 }
 
 /// gitBahn MCP Server handler
@@ -98,172 +103,273 @@ impl GitBahnServer {
         }
     }
 
-    /// Create commits with realistic human-like development flow.
-    #[tool(description = "Create realistic commits that simulate human development flow. Splits files into logical chunks (imports, classes, methods) and commits them progressively over time. Best for new projects.")]
-    async fn realistic_commit(&self, params: Parameters<RealisticCommitRequest>) -> Result<CallToolResult, McpError> {
-        let req = params.0;
-        let mut args = vec!["commit".to_string(), "--realistic".to_string()];
-
-        if let Some(split) = req.split {
-            args.push("--split".to_string());
-            args.push(split.to_string());
-        }
-
-        if let Some(spread) = req.spread {
-            args.push("--spread".to_string());
-            args.push(spread);
-        }
-
-        if let Some(start) = req.start {
-            args.push("--start".to_string());
-            args.push(start);
-        }
-
-        if req.auto_confirm.unwrap_or(true) {
-            args.push("-y".to_string());
-        }
-
-        let result = run_bahn_command(&args);
-        Ok(CallToolResult::success(vec![Content::text(result)]))
+    /// Get git status showing staged and unstaged changes.
+    #[tool(description = "Get git status showing staged and unstaged changes with file status indicators")]
+    async fn get_status(&self) -> Result<CallToolResult, McpError> {
+        let result = run_git(&["status", "--short"]);
+        let output = if result.is_empty() {
+            "Working tree clean - no changes to commit.".to_string()
+        } else {
+            format!("Status:\n{}\n\nLegend: M=modified, A=added, D=deleted, R=renamed, ??=untracked\nFirst column=staged, second column=unstaged", result)
+        };
+        Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
-    /// Create atomic commits by splitting changes by file.
-    #[tool(description = "Create atomic commits split by file. Each changed file gets its own commit. Good for quick splitting of changes.")]
-    async fn atomic_commit(&self, params: Parameters<AtomicCommitRequest>) -> Result<CallToolResult, McpError> {
+    /// Get diff of changes.
+    #[tool(description = "Get diff of staged or unstaged changes. Use this to see what will be committed.")]
+    async fn get_diff(&self, params: Parameters<GetDiffRequest>) -> Result<CallToolResult, McpError> {
         let req = params.0;
-        let mut args = vec!["commit".to_string(), "--atomic".to_string()];
+        let staged = req.staged.unwrap_or(true);
 
-        if let Some(split) = req.split {
-            args.push("--split".to_string());
-            args.push(split.to_string());
+        let mut args = vec!["diff"];
+        if staged {
+            args.push("--cached");
         }
 
-        if let Some(spread) = req.spread {
-            args.push("--spread".to_string());
-            args.push(spread);
+        // Add file paths if specified
+        let files_str: Vec<&str>;
+        if let Some(ref files) = req.files {
+            args.push("--");
+            files_str = files.iter().map(|s| s.as_str()).collect();
+            args.extend(&files_str);
         }
 
-        if let Some(start) = req.start {
-            args.push("--start".to_string());
-            args.push(start);
-        }
-
-        if req.auto_confirm.unwrap_or(true) {
-            args.push("-y".to_string());
-        }
-
-        let result = run_bahn_command(&args);
-        Ok(CallToolResult::success(vec![Content::text(result)]))
-    }
-
-    /// Create granular commits by splitting changes by hunks (diff chunks).
-    #[tool(description = "Create granular commits split by hunks (diff chunks within files). Allows splitting a single file across multiple commits. Best for modified files.")]
-    async fn granular_commit(&self, params: Parameters<GranularCommitRequest>) -> Result<CallToolResult, McpError> {
-        let req = params.0;
-        let mut args = vec!["commit".to_string(), "--granular".to_string()];
-
-        if let Some(split) = req.split {
-            args.push("--split".to_string());
-            args.push(split.to_string());
-        }
-
-        if let Some(spread) = req.spread {
-            args.push("--spread".to_string());
-            args.push(spread);
-        }
-
-        if let Some(start) = req.start {
-            args.push("--start".to_string());
-            args.push(start);
-        }
-
-        if req.auto_confirm.unwrap_or(true) {
-            args.push("-y".to_string());
-        }
-
-        let result = run_bahn_command(&args);
-        Ok(CallToolResult::success(vec![Content::text(result)]))
-    }
-
-    /// Create a single commit with AI-generated message.
-    #[tool(description = "Create a single commit with AI-generated message for all staged changes.")]
-    async fn simple_commit(&self, params: Parameters<SimpleCommitRequest>) -> Result<CallToolResult, McpError> {
-        let req = params.0;
-        let mut args = vec!["commit".to_string()];
-
-        if req.auto_confirm.unwrap_or(true) {
-            args.push("-y".to_string());
-        }
-
-        let result = run_bahn_command(&args);
-        Ok(CallToolResult::success(vec![Content::text(result)]))
+        let result = run_git(&args);
+        let output = if result.is_empty() {
+            if staged {
+                "No staged changes.".to_string()
+            } else {
+                "No unstaged changes.".to_string()
+            }
+        } else {
+            result
+        };
+        Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
     /// Stage all changes in the repository.
     #[tool(description = "Stage all changes in the repository (git add -A)")]
     async fn stage_all(&self) -> Result<CallToolResult, McpError> {
-        let result = match Command::new("git")
-            .args(["add", "-A"])
-            .output()
-        {
-            Ok(output) => {
-                if output.status.success() {
-                    "All changes staged successfully.".to_string()
-                } else {
-                    format!("Failed to stage: {}", String::from_utf8_lossy(&output.stderr))
+        let _ = run_git(&["add", "-A"]);
+        Ok(CallToolResult::success(vec![Content::text("All changes staged.".to_string())]))
+    }
+
+    /// Stage specific files.
+    #[tool(description = "Stage specific files for commit")]
+    async fn stage_files(&self, params: Parameters<StageFilesRequest>) -> Result<CallToolResult, McpError> {
+        let req = params.0;
+        if req.files.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text("No files specified.".to_string())]));
+        }
+
+        let mut args = vec!["add".to_string(), "--".to_string()];
+        args.extend(req.files.clone());
+
+        let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let _ = run_git(&args_ref);
+
+        Ok(CallToolResult::success(vec![Content::text(format!("Staged {} file(s): {}", req.files.len(), req.files.join(", ")))]))
+    }
+
+    /// Create a commit with the given message.
+    #[tool(description = "Create a commit with the provided message. Optionally backdate the commit.")]
+    async fn create_commit(&self, params: Parameters<CreateCommitRequest>) -> Result<CallToolResult, McpError> {
+        let req = params.0;
+
+        // Check if there are staged changes
+        let staged = run_git(&["diff", "--cached", "--stat"]);
+        if staged.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text("Nothing to commit - no staged changes.".to_string())]));
+        }
+
+        let result = if let Some(timestamp) = req.timestamp {
+            // Commit with custom timestamp
+            let date_str = format!("{} +0000", timestamp);
+            match Command::new("git")
+                .args(["commit", "-m", &req.message])
+                .env("GIT_AUTHOR_DATE", &date_str)
+                .env("GIT_COMMITTER_DATE", &date_str)
+                .output()
+            {
+                Ok(output) => {
+                    if output.status.success() {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        format!("Committed with timestamp {}:\n{}", timestamp, stdout)
+                    } else {
+                        format!("Commit failed: {}", String::from_utf8_lossy(&output.stderr))
+                    }
                 }
+                Err(e) => format!("Error: {}", e),
             }
-            Err(e) => format!("Error running git: {}", e),
+        } else {
+            // Normal commit
+            match Command::new("git")
+                .args(["commit", "-m", &req.message])
+                .output()
+            {
+                Ok(output) => {
+                    if output.status.success() {
+                        String::from_utf8_lossy(&output.stdout).to_string()
+                    } else {
+                        format!("Commit failed: {}", String::from_utf8_lossy(&output.stderr))
+                    }
+                }
+                Err(e) => format!("Error: {}", e),
+            }
         };
+
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
-    /// Get git status showing staged and unstaged changes.
-    #[tool(description = "Get git status showing staged and unstaged changes")]
-    async fn git_status(&self) -> Result<CallToolResult, McpError> {
-        let result = match Command::new("git")
-            .args(["status", "--short"])
-            .output()
-        {
-            Ok(output) => {
-                if output.status.success() {
-                    let status = String::from_utf8_lossy(&output.stdout);
-                    if status.is_empty() {
-                        "Working tree clean - no changes to commit.".to_string()
-                    } else {
-                        format!("Changes:\n{}", status)
-                    }
-                } else {
-                    format!("Failed: {}", String::from_utf8_lossy(&output.stderr))
+    /// Get recent commit history.
+    #[tool(description = "Get recent commit history with timestamps and messages")]
+    async fn get_log(&self, params: Parameters<GetLogRequest>) -> Result<CallToolResult, McpError> {
+        let req = params.0;
+        let count = req.count.unwrap_or(10).to_string();
+
+        let format = if req.full.unwrap_or(false) {
+            "%h %ci%n  %s%n  %b"
+        } else {
+            "%h %ci %s"
+        };
+
+        let result = run_git(&["log", &format!("-{}", count), &format!("--format={}", format)]);
+        let output = if result.is_empty() {
+            "No commits yet.".to_string()
+        } else {
+            result
+        };
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    /// Get current branch name.
+    #[tool(description = "Get the current branch name")]
+    async fn get_branch(&self) -> Result<CallToolResult, McpError> {
+        let result = run_git(&["branch", "--show-current"]);
+        Ok(CallToolResult::success(vec![Content::text(format!("Current branch: {}", result.trim()))]))
+    }
+
+    /// Push commits to remote.
+    #[tool(description = "Push commits to remote repository")]
+    async fn push(&self, params: Parameters<PushRequest>) -> Result<CallToolResult, McpError> {
+        let req = params.0;
+        let remote = req.remote.unwrap_or_else(|| "origin".to_string());
+
+        let mut args = vec!["push".to_string(), remote.clone()];
+
+        if let Some(branch) = req.branch {
+            args.push(branch);
+        }
+
+        if req.force.unwrap_or(false) {
+            args.insert(1, "--force-with-lease".to_string());
+        }
+
+        let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let result = run_git(&args_ref);
+
+        let output = if result.is_empty() {
+            format!("Pushed to {}", remote)
+        } else {
+            result
+        };
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    /// Undo recent commits.
+    #[tool(description = "Undo recent commits. By default keeps changes staged (soft reset).")]
+    async fn undo(&self, params: Parameters<UndoRequest>) -> Result<CallToolResult, McpError> {
+        let req = params.0;
+        let count = req.count.unwrap_or(1);
+        let reset_type = if req.hard.unwrap_or(false) { "--hard" } else { "--soft" };
+
+        let result = run_git(&["reset", reset_type, &format!("HEAD~{}", count)]);
+
+        let output = format!(
+            "Reset {} commit(s) with {} reset.\n{}",
+            count,
+            if req.hard.unwrap_or(false) { "hard (changes discarded)" } else { "soft (changes kept staged)" },
+            result
+        );
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    /// List changed files grouped by type.
+    #[tool(description = "List changed files grouped by status (staged/unstaged/untracked)")]
+    async fn list_changes(&self) -> Result<CallToolResult, McpError> {
+        let status = run_git(&["status", "--porcelain"]);
+
+        if status.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text("No changes.".to_string())]));
+        }
+
+        let mut staged = Vec::new();
+        let mut unstaged = Vec::new();
+        let mut untracked = Vec::new();
+
+        for line in status.lines() {
+            if line.len() < 3 {
+                continue;
+            }
+            let index_status = line.chars().next().unwrap_or(' ');
+            let worktree_status = line.chars().nth(1).unwrap_or(' ');
+            let file = &line[3..];
+
+            if index_status == '?' {
+                untracked.push(file.to_string());
+            } else {
+                if index_status != ' ' {
+                    staged.push(format!("{} {}", index_status, file));
+                }
+                if worktree_status != ' ' {
+                    unstaged.push(format!("{} {}", worktree_status, file));
                 }
             }
-            Err(e) => format!("Error running git: {}", e),
-        };
-        Ok(CallToolResult::success(vec![Content::text(result)]))
+        }
+
+        let mut output = String::new();
+
+        if !staged.is_empty() {
+            output.push_str(&format!("Staged ({}):\n", staged.len()));
+            for f in &staged {
+                output.push_str(&format!("  {}\n", f));
+            }
+        }
+
+        if !unstaged.is_empty() {
+            output.push_str(&format!("\nUnstaged ({}):\n", unstaged.len()));
+            for f in &unstaged {
+                output.push_str(&format!("  {}\n", f));
+            }
+        }
+
+        if !untracked.is_empty() {
+            output.push_str(&format!("\nUntracked ({}):\n", untracked.len()));
+            for f in &untracked {
+                output.push_str(&format!("  {}\n", f));
+            }
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 }
 
-/// Run a bahn CLI command and return output
-fn run_bahn_command(args: &[String]) -> String {
-    match Command::new("bahn")
-        .args(args)
-        .output()
-    {
+/// Run a git command and return output
+fn run_git(args: &[&str]) -> String {
+    match Command::new("git").args(args).output() {
         Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-
             if output.status.success() {
-                if stdout.is_empty() {
-                    "Command completed successfully.".to_string()
-                } else {
-                    stdout.to_string()
-                }
+                String::from_utf8_lossy(&output.stdout).to_string()
             } else {
-                format!("Command failed:\n{}\n{}", stdout, stderr)
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if stderr.is_empty() {
+                    String::from_utf8_lossy(&output.stdout).to_string()
+                } else {
+                    format!("Error: {}", stderr)
+                }
             }
         }
-        Err(e) => format!("Error running bahn: {}. Make sure gitBahn is installed (cargo install --path /path/to/gitBahn)", e),
+        Err(e) => format!("Failed to run git: {}", e),
     }
 }
 
@@ -279,15 +385,15 @@ impl ServerHandler for GitBahnServer {
             server_info: Implementation {
                 name: "gitbahn-mcp".to_string(),
                 title: Some("gitBahn MCP Server".to_string()),
-                version: "0.1.0".to_string(),
+                version: "0.2.0".to_string(),
                 icons: None,
-                website_url: Some("https://github.com/example/gitBahn".to_string()),
+                website_url: Some("https://github.com/0xinit/gitBahn".to_string()),
             },
             instructions: Some(
-                "gitBahn MCP server provides tools for creating realistic git commits. \
-                Use realistic_commit for new projects to simulate human development flow. \
-                Use atomic_commit to split by files. Use granular_commit to split by hunks. \
-                All tools support timestamp spreading for natural-looking commit history.".to_string()
+                "gitBahn provides git operations for Claude Code. YOU generate commit messages \
+                by analyzing diffs - no API key needed. Use get_diff to see changes, then \
+                create_commit with your generated message. For realistic history, create \
+                multiple small commits with timestamps spread over time.".to_string()
             ),
         }
     }
@@ -295,13 +401,8 @@ impl ServerHandler for GitBahnServer {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Create server
     let server = GitBahnServer::new();
-
-    // Run server using stdin/stdout
     let transport = stdio();
-
     serve_server(server, transport).await?;
-
     Ok(())
 }
