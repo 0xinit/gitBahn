@@ -1,54 +1,54 @@
 ---
-description: Install gitBahn CLI and MCP server
+description: Set up gitBahn MCP server
 ---
 
 # gitBahn Setup
 
-Install the gitBahn CLI and MCP server for realistic git commits.
+Install the gitBahn MCP server for git operations in Claude Code.
 
-## Instructions
+## Quick Install
 
-1. First, check if cargo (Rust) is installed:
-```bash
-cargo --version
-```
-
-2. If cargo is not installed, install Rust first:
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-
-3. Install the gitBahn CLI:
-```bash
-cd ${CLAUDE_PLUGIN_ROOT}
-cargo install --path .
-```
-
-4. Install the MCP server:
 ```bash
 cd ${CLAUDE_PLUGIN_ROOT}/gitbahn-mcp
 cargo install --path .
 ```
 
-5. Set your Anthropic API key (required for AI commit messages):
-```bash
-export ANTHROPIC_API_KEY=your_key_here
-```
+## Verify Installation
 
-6. Verify installation:
 ```bash
-bahn --version
 which gitbahn-mcp
 ```
 
-## After Setup
+## No API Key Required
 
-The gitBahn tools will be available:
-- `realistic_commit` - Human-like development flow
-- `atomic_commit` - Split by files
-- `granular_commit` - Split by hunks
-- `simple_commit` - Single AI commit
-- `stage_all` - Stage all changes
-- `git_status` - Show changes
+Unlike the standalone CLI, the MCP server doesn't need an Anthropic API key. Claude Code handles all AI operations directly.
 
-Try: "Stage all changes and create 10 realistic commits spread over 4 hours"
+## Available Tools
+
+After setup, these tools are available:
+
+| Tool | Description |
+|------|-------------|
+| `get_status` | Show staged/unstaged changes |
+| `get_diff` | Get diff of changes |
+| `list_changes` | List files by status |
+| `stage_all` | Stage all changes |
+| `stage_files` | Stage specific files |
+| `create_commit` | Create commit with message |
+| `get_log` | Show commit history |
+| `get_branch` | Show current branch |
+| `push` | Push to remote |
+| `undo` | Undo recent commits |
+
+## Example Usage
+
+"Stage all my changes and commit them" - Claude Code will:
+1. Call `stage_all`
+2. Call `get_diff` to see changes
+3. Analyze and generate commit message
+4. Call `create_commit` with the message
+
+"Create 10 realistic commits spread over 4 hours" - Claude Code will:
+1. Analyze the diff
+2. Split into logical chunks
+3. Create commits with spread timestamps
