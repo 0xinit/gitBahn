@@ -21,34 +21,48 @@ which gitbahn-mcp
 
 ## No API Key Required
 
-Unlike the standalone CLI, the MCP server doesn't need an Anthropic API key. Claude Code handles all AI operations directly.
+The MCP server doesn't need an Anthropic API key. Claude Code handles all AI operations directly by analyzing diffs.
 
 ## Available Tools
 
-After setup, these tools are available:
-
+### Git Operations
 | Tool | Description |
 |------|-------------|
 | `get_status` | Show staged/unstaged changes |
 | `get_diff` | Get diff of changes |
-| `list_changes` | List files by status |
+| `list_changes` | List files grouped by status |
 | `stage_all` | Stage all changes |
 | `stage_files` | Stage specific files |
-| `create_commit` | Create commit with message |
+| `unstage_all` | Unstage all files |
+| `create_commit` | Create commit with message + optional timestamp |
 | `get_log` | Show commit history |
 | `get_branch` | Show current branch |
 | `push` | Push to remote |
 | `undo` | Undo recent commits |
 
-## Example Usage
+### Smart Split Suggestions
+| Tool | Description |
+|------|-------------|
+| `suggest_realistic_split` | Split by language constructs (imports, classes, functions) |
+| `suggest_atomic_split` | Split by file (one commit per file) |
+| `suggest_granular_split` | Split by diff hunks (changes within files) |
 
-"Stage all my changes and commit them" - Claude Code will:
-1. Call `stage_all`
-2. Call `get_diff` to see changes
-3. Analyze and generate commit message
-4. Call `create_commit` with the message
+## Example Workflows
 
-"Create 10 realistic commits spread over 4 hours" - Claude Code will:
-1. Analyze the diff
-2. Split into logical chunks
-3. Create commits with spread timestamps
+### Simple commit
+```
+"Commit my changes"
+→ stage_all → get_diff → [analyze] → create_commit
+```
+
+### Realistic commits
+```
+"Create realistic commits spread over 4 hours"
+→ stage_all → suggest_realistic_split → [loop: unstage_all, stage_files, get_diff, create_commit with timestamp]
+```
+
+### Atomic commits
+```
+"Create one commit per file"
+→ stage_all → suggest_atomic_split → [loop: unstage_all, stage_files, get_diff, create_commit]
+```

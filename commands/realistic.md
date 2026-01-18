@@ -4,53 +4,71 @@ description: Create realistic commits that simulate human development flow
 
 # Realistic Commits
 
-Create commits that look like natural human development - multiple small commits spread over time.
+Create commits that look like natural human development - split by language constructs and ordered by dependency.
 
-## Instructions
+## Quick Start
 
-When asked to create realistic commits:
+1. Stage all your changes: `stage_all`
+2. Get split suggestion: `suggest_realistic_split`
+3. Follow the suggested groups to create commits
 
-1. **Get the full diff** using `get_diff` tool
-2. **Analyze and split** the changes into logical chunks:
-   - Group by feature/purpose (not just by file)
-   - Order like a developer would: config -> utils -> core -> features -> tests -> docs
-   - Aim for 5-15 commits depending on change size
-3. **Plan timestamps** spread over the requested duration:
-   - Vary gaps between commits (30min to 3hrs)
-   - Use realistic seconds (not :00 or :30)
-   - Consider working hours if appropriate
-4. **For each logical chunk**:
-   - Stage the relevant files using `stage_files`
-   - Generate an appropriate commit message
-   - Call `create_commit` with message and timestamp
+## How It Works
+
+The `suggest_realistic_split` tool analyzes your staged files and:
+
+1. **Parses by language** - Splits files into logical chunks:
+   - Python: imports → classes → functions
+   - Rust: use/mod → structs/enums → impl/functions
+   - JS/TS: imports → components/functions
+   - Go: package/imports → types → functions
+   - Ruby: requires → classes/modules → methods
+
+2. **Orders by dependency**:
+   - Config files first (Cargo.toml, package.json)
+   - Utilities/helpers
+   - Core/models
+   - Features/services
+   - Tests
+   - Documentation last
+
+3. **Returns grouped suggestions** with files and hints
+
+## Workflow
+
+```
+1. stage_all                           # Stage everything
+2. suggest_realistic_split             # Get groupings
+3. For each group:
+   a. unstage_all                      # Reset staging
+   b. stage_files [group files]        # Stage this group
+   c. get_diff                         # See what's staged
+   d. [Generate commit message]        # You analyze the diff
+   e. create_commit {message, timestamp}  # Commit with optional timestamp
+```
 
 ## Example
 
-User: "Create realistic commits for these changes spread over 6 hours starting at 9am today"
+```
+User: "Create realistic commits spread over 4 hours starting at 10am"
 
-1. Get diff, identify logical groups:
-   - Config changes (package.json, tsconfig)
-   - New utility functions
-   - Core feature implementation
-   - Tests
-   - Documentation
+Claude Code:
+1. Calls stage_all
+2. Calls suggest_realistic_split → gets 8 groups
+3. Plans timestamps: 10:14, 10:47, 11:23, 11:58, 12:34, 13:12, 13:41, 14:08
+4. For each group:
+   - unstage_all
+   - stage_files with group's files
+   - get_diff to see changes
+   - Generates message like "feat(core): add user model"
+   - create_commit with message and timestamp
+```
 
-2. Create commits with timestamps:
-   - 09:14:32 - "chore: update dependencies"
-   - 10:47:18 - "feat(utils): add string helpers"
-   - 12:23:51 - "feat(auth): implement login flow"
-   - 14:08:27 - "test(auth): add login tests"
-   - 15:31:44 - "docs: update API documentation"
+## Options
 
-## Timestamp Format
+- `target_commits`: Merge groups to hit a specific number (e.g., 5 commits)
 
-Use format: `YYYY-MM-DD HH:MM:SS` (e.g., "2025-01-15 14:32:47")
+## Tips
 
-The `create_commit` tool accepts a `timestamp` parameter for backdating.
-
-## Tips for Realistic History
-
-- Vary commit sizes (some small, some medium)
-- Include occasional typo fixes or minor adjustments
-- Group related changes but not too perfectly
-- Space commits unevenly (humans don't commit every 30 mins exactly)
+- Vary timestamps realistically (not exact intervals)
+- Use realistic seconds (14:32:47 not 14:30:00)
+- Mix commit sizes (some small, some larger)
