@@ -11,8 +11,8 @@ use rmcp::{
     tool, tool_router, tool_handler,
     handler::server::tool::ToolRouter,
     handler::server::wrapper::Parameters,
-    service::serve_server,
     transport::io::stdio,
+    ServiceExt,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -933,8 +933,10 @@ impl ServerHandler for GitBahnServer {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let server = GitBahnServer::new();
+    let service = GitBahnServer::new();
     let transport = stdio();
-    serve_server(server, transport).await?;
+    let server = service.serve(transport).await?;
+    // Keep server running until client disconnects
+    server.waiting().await?;
     Ok(())
 }
