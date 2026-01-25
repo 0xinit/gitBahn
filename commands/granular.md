@@ -4,69 +4,82 @@ description: Create granular commits - split by diff hunks
 
 # Granular Commits
 
-Split by diff hunks - allows splitting a single file across multiple commits. Best for modified files with multiple logical changes.
+Split by diff hunks - allows splitting changes within a single file across multiple commits. Best for modified files with multiple logical changes.
 
-## Quick Start
+## How to Use
 
-1. Stage changes: `stage_all`
-2. Get split suggestion: `suggest_granular_split`
-3. Create commits for each hunk group
+When the user asks for "granular commits", follow this workflow:
 
-## How It Works
+### Step 1: Get the Diff with Hunks
 
-The `suggest_granular_split` tool:
-- Parses the staged diff into individual hunks
-- Each hunk represents a contiguous block of changes
-- Shows the function/context where changes occur
-- Allows fine-grained control over commits
-
-## Workflow
-
-```
-1. stage_all
-2. suggest_granular_split
-3. For each hunk group:
-   a. unstage_all
-   b. stage_files [affected files]  # Note: stages whole file
-   c. get_diff
-   d. [Generate commit message]
-   e. create_commit {message}
+```bash
+git add -A
+git diff --cached -U3
 ```
 
-## Example Output
+### Step 2: Parse Diff Hunks
 
+Each hunk starts with `@@ -start,count +start,count @@ context`
+
+Example diff:
 ```
-# GRANULAR Split Suggestion
-
-**4 commit groups** suggested
-
-### Group 1 - fn validate_user
-- Files: src/auth.rs
-- Hint: src/auth.rs:45 (+12/-3)
-
-### Group 2 - fn hash_password
-- Files: src/auth.rs
-- Hint: src/auth.rs:120 (+8/-2)
-
-### Group 3 - struct Config
-- Files: src/config.rs
-- Hint: src/config.rs:10 (+15/-0)
-
-### Group 4 - fn load_config
-- Files: src/config.rs
-- Hint: src/config.rs:50 (+20/-5)
++++ b/src/auth.rs
+@@ -45,3 +45,15 @@ fn validate_user
+  // changes here
+@@ -120,2 +132,10 @@ fn hash_password
+  // more changes
 ```
 
-## Options
+This shows 2 hunks in src/auth.rs at different locations.
 
-- `target_commits`: Merge hunks to hit a specific number
+### Step 3: Group Related Hunks
+
+Group hunks that belong together:
+- Hunks in the same function/method
+- Hunks that are related conceptually
+- Config changes separate from feature changes
+
+### Step 4: Use Interactive Staging
+
+For true hunk-level commits, use `git add -p`:
+
+```bash
+# Interactive staging - stage hunks one by one
+git add -p <file>
+```
+
+This will show each hunk and ask:
+- `y` - stage this hunk
+- `n` - don't stage this hunk
+- `s` - split into smaller hunks
+- `q` - quit
+
+### Step 5: Create Commits
+
+After staging related hunks:
+
+```bash
+git commit -m "feat(auth): add user validation logic"
+```
+
+Repeat for remaining hunks.
+
+## Example
+
+User: "Create granular commits for my auth changes"
+
+Diff analysis shows:
+- src/auth.rs: 3 hunks (validate_user, hash_password, token refresh)
+- src/config.rs: 1 hunk (auth config)
+
+Commits created:
+1. `feat(auth): add user validation function`
+2. `feat(auth): implement password hashing`
+3. `feat(auth): add token refresh logic`
+4. `chore(config): add authentication settings`
 
 ## When to Use
 
 - Modified files with multiple distinct changes
-- When you want to separate unrelated changes in the same file
-- Creating a clean history from a large refactoring
-
-## Limitation
-
-Currently stages whole files rather than individual hunks. For true hunk-level staging, use the standalone `bahn` CLI with `--granular` flag.
+- Separating unrelated changes in the same file
+- Creating clean history from large refactoring
