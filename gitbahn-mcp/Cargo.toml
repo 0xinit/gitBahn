@@ -1,16 +1,20 @@
 [package]
 name = "gitbahn-mcp"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "MCP server for gitBahn - realistic git commits for AI-assisted development"
 license = "MIT"
+repository = "https://github.com/0xinit/gitBahn"
+homepage = "https://github.com/0xinit/gitBahn"
+keywords = ["git", "mcp", "ai", "commits", "claude"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "gitbahn-mcp"
 path = "src/main.rs"
 
 [dependencies]
-rmcp = { version = "0.9", features = ["server", "transport-io"] }
+rmcp = { version = "0.13", features = ["server", "transport-io"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
