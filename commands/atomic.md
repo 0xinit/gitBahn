@@ -4,61 +4,70 @@ description: Create atomic commits - one file per commit
 
 # Atomic Commits
 
-Split changes so each file gets its own commit. Simple and quick.
+Split changes so each file becomes its own commit. Simple and quick.
 
-## Quick Start
+## How to Use
 
-1. Stage all changes: `stage_all`
-2. Get split suggestion: `suggest_atomic_split`
-3. Create commits for each file
+When the user asks for "atomic commits", follow this workflow:
 
-## How It Works
+### Step 1: Get Changed Files
 
-The `suggest_atomic_split` tool:
-- Lists each staged file as its own group
-- Orders by dependency (config → utils → core → features → tests → docs)
-- Provides hints about file type and size
-
-## Workflow
-
-```
-1. stage_all
-2. suggest_atomic_split
-3. For each file:
-   a. unstage_all
-   b. stage_files [single file]
-   c. get_diff
-   d. [Generate commit message]
-   e. create_commit {message}
+```bash
+git status --porcelain
+git add -A
+git diff --cached --name-only
 ```
 
-## Example Output
+### Step 2: Order Files by Dependency
 
+Sort files in this order:
+1. Config files (package.json, Cargo.toml, pyproject.toml, etc.)
+2. Utility files (utils/, helpers/, lib/)
+3. Core files (models/, core/, schema/)
+4. Feature files (services/, handlers/, controllers/)
+5. Test files (test/, spec/, *_test.*)
+6. Documentation (.md files, docs/)
+
+### Step 3: Create One Commit Per File
+
+For each file in order:
+
+```bash
+# Reset staging
+git reset HEAD
+
+# Stage single file
+git add <file>
+
+# Read file to understand it
+cat <file>
+
+# Commit (with optional timestamp)
+git commit -m "descriptive message"
+
+# Or with timestamp
+GIT_AUTHOR_DATE="2025-01-03 14:32:17 +0000" GIT_COMMITTER_DATE="2025-01-03 14:32:17 +0000" git commit -m "message"
 ```
-# ATOMIC Split Suggestion
 
-**5 commit groups** suggested
+## Example
 
-### Group 1 - Add config: package.json
-- Files: package.json
-- Hint: json (25 lines)
+User: "Create atomic commits for my changes"
 
-### Group 2 - Add utils.ts
-- Files: src/utils.ts
-- Hint: typescript (80 lines)
+Files detected: package.json, src/utils/auth.js, src/services/user.js, tests/user.test.js, README.md
 
-### Group 3 - Add api.ts
-- Files: src/api.ts
-- Hint: typescript (120 lines)
+Commits created:
+1. `chore: add project dependencies` (package.json)
+2. `feat(utils): add authentication helpers` (src/utils/auth.js)
+3. `feat(services): add user service` (src/services/user.js)
+4. `test: add user service tests` (tests/user.test.js)
+5. `docs: add project readme` (README.md)
 
-### Group 4 - Add tests: api.test.ts
-- Files: src/api.test.ts
-- Hint: typescript (60 lines)
+## With Time Spread
 
-### Group 5 - Add docs: README.md
-- Files: README.md
-- Hint: markdown (45 lines)
-```
+User: "Create atomic commits spread over 2 hours starting at 9am"
+
+Calculate varied timestamps:
+- 09:12:34, 09:38:17, 10:04:52, 10:31:08, 10:55:43
 
 ## When to Use
 
