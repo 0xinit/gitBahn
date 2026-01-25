@@ -29,12 +29,14 @@ commit a504534  Jan 05, 02:23  docs: add comprehensive README
 
 ## Quick Start (Claude Code Plugin)
 
-The easiest way to use gitBahn - **no API key needed**.
-
-### Install
+**No installation required** - just two commands:
 
 ```bash
-claude plugin add https://github.com/0xinit/gitBahn
+# Step 1: Add the marketplace
+/plugin marketplace add https://github.com/0xinit/gitBahn
+
+# Step 2: Install the plugin
+/plugin install gitbahn
 ```
 
 ### Use
@@ -48,34 +50,14 @@ Just talk to Claude Code:
 "Create 10 commits spread over 2 days starting yesterday at 9am"
 ```
 
-That's it. Claude Code handles the AI work directly.
+### Available Commands
 
-### Available Tools
-
-**Git Operations:**
-- `get_status`, `get_diff`, `list_changes`
-- `stage_all`, `stage_files`, `unstage_all`
-- `create_commit` (with optional timestamp for backdating)
-- `get_log`, `get_branch`, `push`, `undo`
-
-**Smart Split Suggestions:**
-- `suggest_realistic_split` - Language-aware splitting (imports → classes → functions)
-- `suggest_atomic_split` - One file per commit
-- `suggest_granular_split` - Split by diff hunks
-
-### Manual MCP Setup
-
-If not using as a plugin, add to your `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "gitbahn": {
-      "command": "gitbahn-mcp"
-    }
-  }
-}
-```
+| Command | Description |
+|---------|-------------|
+| `/gitbahn:commit` | Smart commit with AI-generated message |
+| `/gitbahn:realistic` | Split by language constructs (imports → classes → functions) |
+| `/gitbahn:atomic` | One file per commit |
+| `/gitbahn:granular` | Split by diff hunks |
 
 ---
 
