@@ -1,44 +1,85 @@
 ---
-description: Create a commit with AI-generated message (no API key needed)
+description: Create a commit with AI-generated message
 ---
 
 # Smart Commit
 
-Create commits with intelligent commit messages - Claude Code generates the message by analyzing the diff.
+Create commits with intelligent commit messages - you analyze the diff and generate the message.
 
-## Instructions
+## How to Use
 
-1. **Get the diff** using `get_diff` tool (staged changes by default)
-2. **Analyze the changes** and generate a conventional commit message:
-   - Use format: `type(scope): description`
-   - Types: feat, fix, docs, style, refactor, test, chore
-   - Keep the first line under 72 characters
-   - Add body for complex changes
-3. **Create the commit** using `create_commit` tool with your message
+When the user asks to "commit" their changes:
 
-## Example Flow
+### Step 1: Check Status
 
+```bash
+git status --short
 ```
+
+### Step 2: Stage Changes (if needed)
+
+```bash
+git add -A
+```
+
+### Step 3: Get the Diff
+
+```bash
+git diff --cached
+```
+
+### Step 4: Generate Commit Message
+
+Analyze the diff and create a conventional commit message:
+- Format: `type(scope): description`
+- Keep first line under 72 characters
+- Add body for complex changes
+
+**Types:**
+- `feat` - New feature
+- `fix` - Bug fix
+- `docs` - Documentation only
+- `style` - Formatting, no code change
+- `refactor` - Code restructuring
+- `test` - Adding tests
+- `chore` - Maintenance tasks
+
+### Step 5: Create the Commit
+
+```bash
+git commit -m "feat(auth): add JWT token validation middleware"
+```
+
+Or with a body:
+```bash
+git commit -m "feat(auth): add JWT token validation
+
+- Add middleware for validating JWT tokens
+- Include refresh token logic
+- Handle token expiration gracefully"
+```
+
+## With Custom Timestamp
+
+To backdate a commit:
+
+```bash
+GIT_AUTHOR_DATE="2025-01-03 14:32:17 +0000" GIT_COMMITTER_DATE="2025-01-03 14:32:17 +0000" git commit -m "message"
+```
+
+## Example
+
 User: "commit my changes"
 
-1. Call get_status to see what's changed
-2. Call stage_all if needed
-3. Call get_diff to see the actual changes
-4. Analyze the diff and generate a message like:
-   "feat(auth): add JWT token validation middleware"
-5. Call create_commit with the message
-```
+1. Run `git status --short` → sees modified auth.js
+2. Run `git add -A`
+3. Run `git diff --cached` → sees JWT validation code added
+4. Generate message: "feat(auth): add JWT token validation middleware"
+5. Run `git commit -m "feat(auth): add JWT token validation middleware"`
 
-## Commit Message Guidelines
+## Split Options
 
-- **feat**: New feature
-- **fix**: Bug fix
-- **docs**: Documentation only
-- **style**: Formatting, no code change
-- **refactor**: Code restructuring
-- **test**: Adding tests
-- **chore**: Maintenance tasks
-
-## No API Key Required
-
-Unlike the standalone CLI, when using gitBahn through Claude Code, no Anthropic API key is needed. Claude Code itself analyzes the diff and generates the commit message.
+For more control over commits, use:
+- `/gitbahn:atomic` - One file per commit
+- `/gitbahn:realistic` - Language-aware splitting
+- `/gitbahn:granular` - Split by diff hunks
