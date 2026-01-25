@@ -1,11 +1,12 @@
 {
   "name": "gitbahn",
-  "version": "0.2.0",
-  "description": "Git operations for Claude Code. Create commits with AI-generated messages - no API key needed.",
+  "version": "0.3.0",
+  "description": "AI-powered git commits for Claude Code. Create realistic commit histories with smart splitting - no installation required.",
   "author": {
-    "name": "naruto11"
-  },  
-  "repository": "https://github.com/example/gitBahn",
+    "name": "0xinit"
+  },
+  "repository": "https://github.com/0xinit/gitBahn",
+  "homepage": "https://github.com/0xinit/gitBahn",
   "license": "MIT",
   "keywords": ["git", "commits", "ai", "realistic", "history", "development"]
 }
